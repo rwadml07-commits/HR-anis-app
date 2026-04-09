@@ -1006,6 +1006,8 @@ export default function HRManagementApp() {
   const [search, setSearch] = useState("");
   const [branchFilter, setBranchFilter] = useState("all");
   const [chatSearch, setChatSearch] = useState("");
+  const [chatSearchDialogOpen, setChatSearchDialogOpen] = useState(false);
+  const [chatPhoneSearch, setChatPhoneSearch] = useState("");
   const [chatDraft, setChatDraft] = useState("");
   const [activeChatId, setActiveChatId] = useState("");
   const [chatFilter, setChatFilter] = useState("all");
@@ -1064,6 +1066,7 @@ export default function HRManagementApp() {
   const chatCameraInputRef = useRef(null);
   const chatPhotosInputRef = useRef(null);
   const chatDocumentInputRef = useRef(null);
+  const chatAudioInputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const recordingChunksRef = useRef([]);
   const recordingStreamRef = useRef(null);
@@ -1128,8 +1131,17 @@ export default function HRManagementApp() {
     event: "مناسبة",
     poll: "استطلاع رأي",
     document: "مستند",
+    archived: "المؤرشفة",
+    searchByPhone: "البحث بالرقم",
+    searchAction: "بحث",
+    chatNow: "دردشة",
+    block: "حظر",
+    unblock: "فك الحظر",
+    deleteChat: "حذف الدردشة",
+    hideMyNumber: "إخفاء رقمي من البحث",
+    showMyNumber: "إظهار رقمي في البحث",
   } : {
-    reply: "Reply", forward: "Forward", copy: "Copy", star: "Star", save: "Save", delete: "Delete", more: "More...", pin: "Pin", privateReply: "Reply privately", addContact: "Add to contacts", messageContact: "Message", report: "Report", mute: "Mute", info: "Chat info", lock: "Lock chat", addToFav: "Add to favorites", addToList: "Add to list", clearChat: "Clear chat", leaveGroup: "Leave group", markUnread: "Mark unread", archive: "Archive", unarchive: "Unarchive", contactInfo: "Contact info", media: "Media, links and docs", storage: "Manage storage", starred: "Starred", wallpaper: "Chat theme", saveToPhotos: "Save to photos", disappearing: "Disappearing messages", lockChat: "Lock chat", recording: "Voice recording", send: "Send", pause: "Pause", resume: "Resume", contact: "Contact", location: "Location", camera: "Camera", photos: "Photos", aiImages: "AI images", event: "Event", poll: "Poll", document: "Document",
+    reply: "Reply", forward: "Forward", copy: "Copy", star: "Star", save: "Save", delete: "Delete", more: "More...", pin: "Pin", privateReply: "Reply privately", addContact: "Add to contacts", messageContact: "Message", report: "Report", mute: "Mute", info: "Chat info", lock: "Lock chat", addToFav: "Add to favorites", addToList: "Add to list", clearChat: "Clear chat", leaveGroup: "Leave group", markUnread: "Mark unread", archive: "Archive", unarchive: "Unarchive", contactInfo: "Contact info", media: "Media, links and docs", storage: "Manage storage", starred: "Starred", wallpaper: "Chat theme", saveToPhotos: "Save to photos", disappearing: "Disappearing messages", lockChat: "Lock chat", recording: "Voice recording", send: "Send", pause: "Pause", resume: "Resume", contact: "Contact", location: "Location", camera: "Camera", photos: "Photos", aiImages: "AI images", event: "Event", poll: "Poll", document: "Document", archived: "Archived", searchByPhone: "Search by phone", searchAction: "Search", chatNow: "Chat", block: "Block", unblock: "Unblock", deleteChat: "Delete chat", hideMyNumber: "Hide my number from search", showMyNumber: "Show my number in search",
   };
 
   const isEmployee = authUser?.role === "employee";
@@ -1859,6 +1871,7 @@ useEffect(() => {
       unreadBy: chat.unreadBy || [],
       lockedBy: chat.lockedBy || [],
       favoriteBy: chat.favoriteBy || [],
+      blockedBy: chat.blockedBy || [],
       messages: chat.messages || [],
       ...chat,
     }));
@@ -1912,7 +1925,13 @@ useEffect(() => {
 
     return [...groupThreads, ...directThreads]
       .filter((thread) => {
-        if ((thread.archivedBy || []).includes(authUser?.phone)) return false;
+        if ((thread.blockedBy || []).includes(authUser?.phone)) return false;
+        const isArchived = (thread.archivedBy || []).includes(authUser?.phone);
+        if (chatFilter === "archived") {
+          if (!isArchived) return false;
+        } else if (isArchived) {
+          return false;
+        }
         if (chatFilter === "groups" && thread.type !== "group") return false;
         if (chatFilter === "direct" && thread.type !== "direct") return false;
         if (!loweredSearch) return true;
@@ -2300,6 +2319,25 @@ useEffect(() => {
     reader.readAsDataURL(file);
   };
 
+  const handleAudioFileSelection = (event) => {
+    const file = event.target.files?.[0];
+    if (!file || !activeConversation || !authUser) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      upsertConversationWithMessage(activeConversation, createChatMessage({
+        type: "voice",
+        text: language === "ar" ? "رسالة صوتية" : "Voice note",
+        fileName: file.name || `voice-${Date.now()}.m4a`,
+        mediaUrl: String(reader.result || ""),
+        mimeType: file.type || "audio/*",
+        fileSize: Number(file.size || 0),
+        duration: "00:00",
+      }));
+      event.target.value = "";
+    };
+    reader.readAsDataURL(file);
+  };
+
   const openChatCamera = () => {
     openCameraCapture();
   };
@@ -2330,37 +2368,6 @@ useEffect(() => {
     setActiveChatId(nextGroup.id);
   };
 
-  const startChatCall = (mode) => {
-    if (!authUser || !activeConversation) return;
-    const entry = {
-      id: Date.now(),
-      chatId: activeConversation.id,
-      mode,
-      startedAt: new Date().toISOString(),
-      title: activeConversation.name,
-    };
-    setChatCalls((prev) => [entry, ...prev]);
-    setOngoingCall(entry);
-    upsertConversationWithMessage(activeConversation, createChatMessage({
-      type: "system",
-      system: true,
-      text: mode === "video" ? (language === "ar" ? "بدأ اتصال فيديو" : "Video call started") : (language === "ar" ? "بدأ اتصال صوتي" : "Voice call started"),
-    }));
-  };
-
-  const endChatCall = () => {
-    if (!ongoingCall || !activeConversation) {
-      setOngoingCall(null);
-      return;
-    }
-    upsertConversationWithMessage(activeConversation, createChatMessage({
-      type: "system",
-      system: true,
-      text: language === "ar" ? "تم إنهاء المكالمة" : "Call ended",
-    }));
-    setOngoingCall(null);
-  };
-
   const toggleActiveChatPin = () => toggleActiveChatFlag("pinnedBy");
 
   const toggleActiveChatMute = () => toggleActiveChatFlag("mutedBy");
@@ -2386,12 +2393,12 @@ useEffect(() => {
 
   const startVoiceRecording = async () => {
     setAttachSheetOpen(false);
+    if (isMobileView && chatAudioInputRef.current) {
+      chatAudioInputRef.current.click();
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      upsertConversationWithMessage(activeConversation, createChatMessage({
-        type: "system",
-        system: true,
-        text: language === "ar" ? "المتصفح لا يدعم تسجيل الصوت المباشر." : "This browser does not support direct voice recording.",
-      }));
+      chatAudioInputRef.current?.click?.();
       return;
     }
 
@@ -2567,6 +2574,51 @@ useEffect(() => {
     () => chatContacts.filter((item) => item.type === "direct"),
     [chatContacts]
   );
+
+  const searchableChatUsers = useMemo(() => {
+    if (!authUser) return [];
+    const value = chatPhoneSearch.trim();
+    if (!value) return [];
+    return systemUsers
+      .filter((user) => user.phone !== authUser.phone)
+      .filter((user) => String(user.phone || "").includes(value))
+      .filter((user) => !(["owner", "hr"].includes(user.role) && user.searchHidden))
+      .map((user) => {
+        const employee = employees.find((emp) => emp.phone === user.phone);
+        return {
+          ...user,
+          department: employee?.department || user.managedDepartment || "-",
+          branch: employee?.location || user.managedBranch || "-",
+          profileImage: employee?.profileImage || "",
+        };
+      });
+  }, [authUser, chatPhoneSearch, systemUsers, employees]);
+
+  const openChatFromSearch = (user) => {
+    if (!authUser || !user) return;
+    const chatId = `direct-${[authUser.phone, user.phone].sort().join("-")}`;
+    setActiveChatId(chatId);
+    setChatSearchDialogOpen(false);
+    setChatPhoneSearch("");
+    if (isMobileView) setMobileChatView("conversation");
+  };
+
+  const deleteChatById = (chatId) => {
+    if (!chatId) return;
+    setChats((prev) => prev.filter((chat) => chat.id !== chatId));
+    setContactListMenuChatId("");
+    if (activeChatId === chatId) {
+      setActiveChatId("");
+      if (isMobileView) setMobileChatView("list");
+    }
+  };
+
+  const toggleMySearchVisibility = () => {
+    if (!authUser || !["owner", "hr"].includes(authUser.role)) return;
+    const nextHidden = !authUser.searchHidden;
+    setSystemUsers((prev) => prev.map((user) => user.phone === authUser.phone ? { ...user, searchHidden: nextHidden } : user));
+    setAuthUser((prev) => prev ? { ...prev, searchHidden: nextHidden } : prev);
+  };
 
   const openSidebarTab = (tab) => {
     setActiveTab(tab);
@@ -3644,13 +3696,14 @@ useEffect(() => {
                       placeholder={t.chatSearch}
                     />
                   </div>
-                  <Button onClick={() => setGroupDialogOpen(true)} style={{ ...ui.chatCreateGroupBtn, ...(isMobileView ? ui.chatCreateGroupBtnMobile : {}) }}><UsersRound size={16} /> {t.chatCreateGroup}</Button>
+                  <Button onClick={() => setChatSearchDialogOpen(true)} style={{ ...ui.chatCreateGroupBtn, ...(isMobileView ? ui.chatCreateGroupBtnMobile : {}) }}><Search size={16} /> {chatLabels.searchByPhone}</Button>
                 </div>
 
                 <div style={ui.chatFilterBar}>
                   <button type="button" onClick={() => setChatFilter("all")} style={{ ...ui.chatFilterChip, ...(chatFilter === "all" ? ui.chatFilterChipActive : {}) }}>{t.chatAll}</button>
                   <button type="button" onClick={() => setChatFilter("groups")} style={{ ...ui.chatFilterChip, ...(chatFilter === "groups" ? ui.chatFilterChipActive : {}) }}>{t.chatGroups}</button>
                   <button type="button" onClick={() => setChatFilter("direct")} style={{ ...ui.chatFilterChip, ...(chatFilter === "direct" ? ui.chatFilterChipActive : {}) }}>{t.chatDirect}</button>
+                  <button type="button" onClick={() => setChatFilter("archived")} style={{ ...ui.chatFilterChip, ...(chatFilter === "archived" ? ui.chatFilterChipActive : {}) }}>{chatLabels.archived}</button>
                 </div>
               </div>
 
@@ -3660,6 +3713,17 @@ useEffect(() => {
                     key={contact.id}
                     style={{ ...ui.chatContactItemWrap, ...(contactListMenuChatId === contact.id ? ui.chatContactItemWrapRaised : {}) }}
                   >
+                    {isMobileView && (
+                      <button
+                        type="button"
+                        style={ui.chatContactMenuButton}
+                        onClick={() => setContactListMenuChatId((prev) => prev === contact.id ? "" : contact.id)}
+                        title={chatLabels.more}
+                      >
+                        <MoreHorizontal size={18} />
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => { setActiveChatId(contact.id); if (isMobileView) setMobileChatView("conversation"); }}
@@ -3675,10 +3739,10 @@ useEffect(() => {
                       <div style={ui.chatContactBody}>
                         <div style={ui.chatContactTopLine}>
                           <strong style={{ ...ui.chatContactName, ...(isMobileView ? ui.chatContactNameMobile : {}) }}>{contact.name}</strong>
-                          <span style={ui.chatTimeMuted}>{formatChatTime(contact.lastMessage?.sentAt)}</span>
                         </div>
                         <div style={ui.chatMetaLine}>{contact.roleLabel} • {contact.department}</div>
                         <div style={ui.chatSnippet}>{formatChatSnippet(contact.lastMessage)}</div>
+                        <div style={ui.chatTimeMuted}>{formatChatTime(contact.lastMessage?.sentAt)}</div>
                       </div>
                       <div style={ui.chatSideBadges}>
                         {(contact.pinnedBy || []).includes(authUser?.phone) && <span style={ui.chatTinyBadge}>{t.chatPinned}</span>}
@@ -3686,17 +3750,6 @@ useEffect(() => {
                         {!!contact.unreadCount && <span style={ui.chatUnreadBubble}>{contact.unreadCount}</span>}
                       </div>
                     </button>
-
-                    {isMobileView && (
-                      <button
-                        type="button"
-                        style={ui.chatContactMenuButton}
-                        onClick={() => setContactListMenuChatId((prev) => prev === contact.id ? "" : contact.id)}
-                        title={chatLabels.more}
-                      >
-                        <MoreHorizontal size={18} />
-                      </button>
-                    )}
 
                     {isMobileView && contactListMenuChatId === contact.id && (
                       <div style={ui.chatContactMenuPopup}>
@@ -3706,8 +3759,11 @@ useEffect(() => {
                         <button type="button" style={ui.chatContactMenuItem} onClick={() => { toggleChatFlagById(contact.id, "mutedBy"); setContactListMenuChatId(""); }}>
                           <BellOff size={16} /> <span>{t.chatMuted}</span>
                         </button>
-                        <button type="button" style={ui.chatContactMenuItem} onClick={() => { setActiveChatId(contact.id); setMobileChatView("conversation"); setChatMoreOpen(true); setContactListMenuChatId(""); }}>
-                          <MoreHorizontal size={16} /> <span>{chatLabels.more}</span>
+                        <button type="button" style={ui.chatContactMenuItem} onClick={() => { toggleChatFlagById(contact.id, "blockedBy"); setContactListMenuChatId(""); }}>
+                          <Lock size={16} /> <span>{(contact.blockedBy || []).includes(authUser?.phone) ? chatLabels.unblock : chatLabels.block}</span>
+                        </button>
+                        <button type="button" style={{ ...ui.chatContactMenuItem, ...ui.actionMenuDanger }} onClick={() => deleteChatById(contact.id)}>
+                          <Trash2 size={16} /> <span>{chatLabels.deleteChat}</span>
                         </button>
                       </div>
                     )}
@@ -3747,24 +3803,15 @@ useEffect(() => {
                       </div>
                     </div>
                     <div style={{ ...ui.chatHeaderTools, ...(isMobileView ? ui.chatHeaderToolsMobile : {}) }}>
-                      <button type="button" style={ui.chatHeaderIconButton} onClick={() => startChatCall("voice")} title={t.chatStartCall}><PhoneCall size={18} /></button>
-                      <button type="button" style={ui.chatHeaderIconButton} onClick={() => startChatCall("video")} title={t.chatStartVideo}><Video size={18} /></button>
                       {!isMobileView && <button type="button" style={ui.chatHeaderIconButton} onClick={toggleActiveChatPin} title={t.chatPinned}><Pin size={18} /></button>}
                       {!isMobileView && <button type="button" style={ui.chatHeaderIconButton} onClick={toggleActiveChatMute} title={t.chatMuted}><BellOff size={18} /></button>}
-                      {!isMobileView && <button type="button" style={ui.chatHeaderIconButton} onClick={() => setChatMoreOpen(true)} title={chatLabels.more}><MoreHorizontal size={18} /></button>}
-                      {!isMobileView && <Badge>{activeConversation.branch}</Badge>}
+                      <button type="button" style={ui.chatHeaderIconButton} onClick={() => setChatMoreOpen(true)} title={chatLabels.more}><MoreHorizontal size={18} /></button>
+                      {!isMobileView && <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                        <Badge>{activeConversation.branch}</Badge>
+                        <span style={ui.chatTimeMuted}>{formatChatTime(activeConversation.lastMessage?.sentAt)}</span>
+                      </div>}
                     </div>
                   </div>
-
-                  {ongoingCall && ongoingCall.chatId === activeConversation.id && (
-                    <div style={ui.chatCallBanner}>
-                      <div>
-                        <strong>{ongoingCall.mode === "video" ? t.chatStartVideo : t.chatStartCall}</strong>
-                        <div style={ui.chatCallBannerSub}>{t.chatCallActive} • {formatChatTime(ongoingCall.startedAt)}</div>
-                      </div>
-                      <Button variant="danger" onClick={endChatCall} style={ui.smallBtn}>{t.chatEndCall}</Button>
-                    </div>
-                  )}
 
                   <div style={{ ...ui.chatMessagesAreaLarge, ...(isMobileView ? ui.chatMessagesAreaMobile : {}) }}>
                     {(activeConversation?.messages || []).length ? (
@@ -3857,12 +3904,6 @@ useEffect(() => {
                       <div style={ui.chatEmptyMain}>{t.chatEmpty}</div>
                     )}
                   </div>
-
-                  <div style={ui.chatQuickActions}>
-                    <button type="button" style={ui.chatAttachButton} title={chatLabels.archive} onClick={toggleActiveChatArchive}><Archive size={18} /></button>
-                    <button type="button" style={ui.chatAttachButton} title={chatLabels.markUnread} onClick={toggleActiveChatUnread}><MessageCircle size={18} /></button>
-                  </div>
-
                   {isRecordingVoice ? (
                     <div style={ui.voiceRecorderBar}>
                       <button type="button" style={ui.voiceRecorderIcon} onClick={cancelVoiceRecording}><Trash2 size={20} /></button>
@@ -3880,6 +3921,12 @@ useEffect(() => {
                     <button type="button" style={ui.chatComposerEdgeButton} onClick={() => setAttachSheetOpen(true)} title={t.chatAttach}>
                       <Plus size={24} />
                     </button>
+                    <button type="button" style={ui.chatComposerEdgeButton} onClick={openChatCamera} title={t.chatPhoto}>
+                      <Camera size={22} />
+                    </button>
+                    <button type="button" style={ui.chatComposerEdgeButton} onClick={startVoiceRecording} title={t.chatVoiceNote}>
+                      <Mic size={22} />
+                    </button>
                     <input
                       style={ui.chatComposerInput}
                       value={chatDraft}
@@ -3892,11 +3939,8 @@ useEffect(() => {
                       }}
                       placeholder={t.chatWrite}
                     />
-                    <button type="button" style={ui.chatComposerEdgeButton} onClick={openChatCamera} title={t.chatPhoto}>
-                      <Camera size={22} />
-                    </button>
-                    <button type="button" style={ui.chatComposerEdgeButton} onClick={startVoiceRecording} title={t.chatVoiceNote}>
-                      <Mic size={22} />
+                    <button type="button" style={ui.chatSendButton} onClick={sendChatMessage} title={t.sendMessage}>
+                      <Send size={18} />
                     </button>
                   </div>
                   )}
@@ -5045,6 +5089,41 @@ useEffect(() => {
         style={{ display: "none" }}
         onChange={(e) => handleChatFileSelection(e, "file")}
       />
+      <input
+        ref={chatAudioInputRef}
+        type="file"
+        accept="audio/*"
+        capture
+        style={{ display: "none" }}
+        onChange={handleAudioFileSelection}
+      />
+
+      <Modal open={chatSearchDialogOpen} title={chatLabels.searchByPhone} onClose={() => setChatSearchDialogOpen(false)} maxWidth={560}>
+        <div style={{ display: "grid", gap: 14 }}>
+          <Input
+            value={chatPhoneSearch}
+            onChange={(e) => setChatPhoneSearch(e.target.value.replace(/\D/g, ""))}
+            placeholder={language === "ar" ? "اكتب رقم الهاتف كاملاً" : "Enter full phone number"}
+          />
+          <div style={{ display: "grid", gap: 10, maxHeight: 320, overflowY: "auto" }}>
+            {searchableChatUsers.length ? searchableChatUsers.map((user) => (
+              <div key={user.phone} style={{ ...ui.chatContactItem, padding: 14 }}>
+                <div style={ui.chatAvatarWrap}>
+                  {user.profileImage ? <img src={user.profileImage} alt={user.name} style={ui.chatAvatarImage} /> : <div style={ui.chatAvatarFallback}>{(user.name || "?").charAt(0)}</div>}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 800 }}>{user.name}</div>
+                  <div style={ui.chatMetaLine}>{getRoleLabel(user.role, language)} • {user.department}</div>
+                  <div style={ui.chatSnippet}>{user.phone}</div>
+                </div>
+                <Button onClick={() => openChatFromSearch(user)}>{chatLabels.chatNow}</Button>
+              </div>
+            )) : (
+              <div style={ui.chatEmptySide}>{chatPhoneSearch ? (language === "ar" ? "لا يوجد مستخدم بهذا الرقم." : "No user found with this number.") : (language === "ar" ? "اكتب الرقم للبحث." : "Type a number to search.")}</div>
+            )}
+          </div>
+        </div>
+      </Modal>
 
       <Modal open={contactInfoOpen} title={chatLabels.contactInfo} onClose={() => setContactInfoOpen(false)} maxWidth={640}>
         {activeConversation && (
@@ -5056,6 +5135,7 @@ useEffect(() => {
             </div>
             <div style={ui.contactInfoActions}>
               <button type="button" style={ui.contactActionBox}><Search size={22} /><span>{language === "ar" ? "بحث" : "Search"}</span></button>
+              <button type="button" style={ui.contactActionBox} onClick={() => { setContactInfoOpen(false); setChatSearchDialogOpen(true); }}><Search size={22} /><span>{chatLabels.searchByPhone}</span></button>
               <button type="button" style={ui.contactActionBox}><MessageCircle size={22} /><span>{chatLabels.messageContact}</span></button>
             </div>
             <div style={ui.infoList}>
@@ -5103,8 +5183,10 @@ useEffect(() => {
           <button type="button" style={ui.actionMenuItem} onClick={() => { setContactInfoOpen(true); setChatMoreOpen(false); }}><Info size={18} /> <span>{chatLabels.info}</span></button>
           <button type="button" style={ui.actionMenuItem} onClick={() => { toggleActiveChatLock(); setChatMoreOpen(false); }}><Lock size={18} /> <span>{chatLabels.lock}</span></button>
           <button type="button" style={ui.actionMenuItem} onClick={() => { toggleActiveChatFavorite(); setChatMoreOpen(false); }}><Star size={18} /> <span>{chatLabels.addToFav}</span></button>
-          <button type="button" style={ui.actionMenuItem} onClick={() => { toggleActiveChatArchive(); setChatMoreOpen(false); }}><Archive size={18} /> <span>{(activeConversation?.archivedBy || []).includes(authUser?.phone) ? chatLabels.unarchive : chatLabels.archive}</span></button>
+          {chatFilter === "archived" && <button type="button" style={ui.actionMenuItem} onClick={() => { toggleActiveChatArchive(); setChatMoreOpen(false); }}><Archive size={18} /> <span>{chatLabels.unarchive}</span></button>}
           <button type="button" style={ui.actionMenuItem} onClick={() => { toggleActiveChatUnread(); setChatMoreOpen(false); }}><MessageCircle size={18} /> <span>{chatLabels.markUnread}</span></button>
+          {activeConversation?.type === "direct" && <button type="button" style={ui.actionMenuItem} onClick={() => { toggleActiveChatFlag("blockedBy"); setChatMoreOpen(false); }}><Lock size={18} /> <span>{(activeConversation?.blockedBy || []).includes(authUser?.phone) ? chatLabels.unblock : chatLabels.block}</span></button>}
+          <button type="button" style={{ ...ui.actionMenuItem, ...ui.actionMenuDanger }} onClick={() => { deleteChatById(activeConversation?.id); setChatMoreOpen(false); }}><Trash2 size={18} /> <span>{chatLabels.deleteChat}</span></button>
           <button type="button" style={ui.actionMenuItem} onClick={clearActiveChatMessages}><Trash2 size={18} /> <span>{chatLabels.clearChat}</span></button>
           {activeConversation?.type === "group" && <button type="button" style={{ ...ui.actionMenuItem, ...ui.actionMenuDanger }} onClick={leaveCurrentGroup}><LogOut size={18} /> <span>{chatLabels.leaveGroup}</span></button>}
         </div>
@@ -5137,6 +5219,15 @@ useEffect(() => {
             <div style={ui.settingsTitle}><KeyRound size={16} /> {t.changePassword}</div>
             <Button onClick={openPasswordDialog}>{t.openPassword}</Button>
           </div>
+
+          {["owner", "hr"].includes(authUser?.role) && (
+            <div style={ui.settingsBox}>
+              <div style={ui.settingsTitle}><Search size={16} /> {chatLabels.searchByPhone}</div>
+              <Button variant={authUser?.searchHidden ? "danger" : "outline"} onClick={toggleMySearchVisibility}>
+                {authUser?.searchHidden ? chatLabels.showMyNumber : chatLabels.hideMyNumber}
+              </Button>
+            </div>
+          )}
         </div>
       </Modal>
 
