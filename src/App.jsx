@@ -3779,7 +3779,19 @@ useEffect(() => {
             <div style={{ ...ui.chatMainPanel, ...(isMobileView ? ui.chatMainPanelMobile : {}) }}>
               {activeConversation ? (
                 <>
-                  <div style={{ ...ui.chatHeaderBar, ...(isMobileView ? ui.chatHeaderBarMobile : {}) }}>
+                  <div style={{ ...ui.chatHeaderBar, ...(isMobileView ? ui.chatHeaderBarMobile : {}), ...(!isMobileView ? ui.chatHeaderBarDesktop : {}) }}>
+                    {!isMobileView && (
+                      <div style={ui.chatDesktopMoreWrapper}>
+                        <button
+                          type="button"
+                          style={ui.chatDesktopMoreButton}
+                          onClick={() => setChatMoreOpen(true)}
+                          title={chatLabels.more}
+                        >
+                          <MoreHorizontal size={18} />
+                        </button>
+                      </div>
+                    )}
                     <div style={{ ...ui.chatHeaderIdentity, ...(isMobileView ? ui.chatHeaderIdentityMobile : { alignItems: "center", minWidth: 0, flex: 1 }) }}>
                       {isMobileView && (
                         <button type="button" onClick={() => setMobileChatView("list")} style={ui.chatHeaderBackButton}>›</button>
@@ -3803,11 +3815,13 @@ useEffect(() => {
                       </div>
                     </div>
                     <div style={{ ...ui.chatHeaderTools, ...(isMobileView ? ui.chatHeaderToolsMobile : {}) }}>
-                      <button type="button" style={{ ...ui.chatHeaderIconButton, ...(isMobileView ? ui.chatHeaderIconButtonMobile : {}) }} onClick={toggleActiveChatPin} title={t.chatPinned}><Pin size={isMobileView ? 16 : 18} /></button>
-                      <button type="button" style={{ ...ui.chatHeaderIconButton, ...(isMobileView ? ui.chatHeaderIconButtonMobile : {}) }} onClick={toggleActiveChatMute} title={t.chatMuted}><BellOff size={isMobileView ? 16 : 18} /></button>
-                      <button type="button" style={{ ...ui.chatHeaderIconButton, ...(isMobileView ? ui.chatHeaderIconButtonMobile : {}) }} onClick={() => setChatMoreOpen(true)} title={chatLabels.more}><MoreHorizontal size={isMobileView ? 16 : 18} /></button>
                       {isMobileView ? (
-                        <span style={ui.chatHeaderMobileTime}>{formatChatTime(activeConversation.lastMessage?.sentAt)}</span>
+                        <>
+                          <button type="button" style={{ ...ui.chatHeaderIconButton, ...ui.chatHeaderIconButtonMobile }} onClick={toggleActiveChatPin} title={t.chatPinned}><Pin size={16} /></button>
+                          <button type="button" style={{ ...ui.chatHeaderIconButton, ...ui.chatHeaderIconButtonMobile }} onClick={toggleActiveChatMute} title={t.chatMuted}><BellOff size={16} /></button>
+                          <button type="button" style={{ ...ui.chatHeaderIconButton, ...ui.chatHeaderIconButtonMobile }} onClick={() => setChatMoreOpen(true)} title={chatLabels.more}><MoreHorizontal size={16} /></button>
+                          <span style={ui.chatHeaderMobileTime}>{formatChatTime(activeConversation.lastMessage?.sentAt)}</span>
+                        </>
                       ) : (
                         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
                           <Badge>{activeConversation.branch}</Badge>
@@ -6369,6 +6383,29 @@ const ui = {
     padding: "18px 20px",
     borderBottom: "1px solid var(--border)",
     background: "linear-gradient(135deg, rgba(37,211,102,0.10), rgba(0,136,204,0.12))",
+  },
+  chatHeaderBarDesktop: {
+    position: "relative",
+    overflow: "visible",
+  },
+  chatDesktopMoreWrapper: {
+    position: "absolute",
+    left: -58,
+    top: 18,
+    zIndex: 6,
+  },
+  chatDesktopMoreButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    border: "1px solid var(--border)",
+    background: "var(--surface)",
+    color: "var(--text-soft)",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+    boxShadow: "0 12px 28px rgba(15, 23, 42, 0.10)",
   },
   chatHeaderIdentity: {
     display: "flex",
