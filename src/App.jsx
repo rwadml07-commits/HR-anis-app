@@ -1192,18 +1192,19 @@ export default function HRManagementApp() {
   };
 
   const getCloudStatusLabel = () => {
+    if (cloudStatus === "error") return null;
+
     if (language === "ar") {
       if (!cloudEnabled) return "المزامنة غير مفعلة - أضف بيانات Supabase";
       if (cloudStatus === "online") return "متصل بقاعدة البيانات";
       if (cloudStatus === "syncing") return "جاري المزامنة";
-      if (cloudStatus === "error") return "خطأ في المزامنة - راجع مفاتيح Supabase و SQL";
       if (cloudStatus === "connecting") return "جاري الاتصال";
       return "تخزين محلي فقط";
     }
+
     if (!cloudEnabled) return "Local only - add Supabase config";
     if (cloudStatus === "online") return "Database connected";
     if (cloudStatus === "syncing") return "Syncing";
-    if (cloudStatus === "error") return "Sync error - check Supabase config";
     if (cloudStatus === "connecting") return "Connecting";
     return "Local storage only";
   };
@@ -3397,7 +3398,9 @@ useEffect(() => {
           </div>
 
           <div style={{ ...ui.heroActions, ...(isMobileView ? ui.heroActionsMobile : {}) }}>
+            {getCloudStatusLabel() && (
             <div style={ui.cloudStatusBadge}>{getCloudStatusLabel()}</div>
+          )}
             {isAuthenticated && (
               <div style={{ ...ui.searchBox, ...(isMobileView ? ui.searchBoxMobile : {}) }}>
                 <Search size={16} />
