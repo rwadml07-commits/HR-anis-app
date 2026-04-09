@@ -406,61 +406,25 @@ async function upsertRemoteStateRow(payload) {
   if (!isRemoteSyncEnabled()) return { data: null, error: null };
   const row = {
     id: REMOTE_STATE_ROW_ID,
-    payload: sanitizeRemoteState(payload),
+    payload,
     updated_at: new Date().toISOString(),
   };
-
-  const requestBody = JSON.stringify([row]);
-  const requestHeaders = buildSupabaseHeaders({
-    Prefer: "resolution=merge-duplicates,return=representation",
-  });
-
   try {
-    const response = await fetch(
-      `${buildSupabaseRestUrl()}?on_conflict=id`,
-      {
-        method: "POST",
-        headers: requestHeaders,
-        body: requestBody,
-      }
-    );
-
+    const response = await fetch(buildSupabaseRestUrl(), {
+      method: "POST",
+      headers: buildSupabaseHeaders({
+        Prefer: "resolution=merge-duplicates,return=representation",
+      }),
+      body: JSON.stringify([row]),
+    });
     if (!response.ok) {
       const message = await response.text();
       throw new Error(message || `HTTP ${response.status}`);
     }
-
     const rows = await response.json();
     return { data: Array.isArray(rows) ? rows[0] || row : row, error: null };
-  } catch (postError) {
-    try {
-      const patchResponse = await fetch(
-        buildSupabaseRestUrl(`?id=eq.${encodeURIComponent(REMOTE_STATE_ROW_ID)}`),
-        {
-          method: "PATCH",
-          headers: buildSupabaseHeaders({
-            Prefer: "return=representation",
-          }),
-          body: JSON.stringify({
-            payload: row.payload,
-            updated_at: row.updated_at,
-          }),
-        }
-      );
-
-      if (!patchResponse.ok) {
-        const patchMessage = await patchResponse.text();
-        throw new Error(patchMessage || `HTTP ${patchResponse.status}`);
-      }
-
-      const rows = await patchResponse.json();
-      return { data: Array.isArray(rows) ? rows[0] || row : row, error: null };
-    } catch (patchError) {
-      return {
-        data: null,
-        error: patchError instanceof Error ? patchError : postError,
-      };
-    }
+  } catch (error) {
+    return { data: null, error };
   }
 }
 
@@ -494,7 +458,7 @@ function sanitizeRemoteState(payload) {
   const defaults = buildDefaultRemoteState();
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return defaults;
 
-  const next = {
+  return {
     employees: normalizeEmployeesCollection(payload.employees),
     requests: Array.isArray(payload.requests) ? payload.requests : defaults.requests,
     users: Array.isArray(payload.users) ? payload.users : defaults.users,
@@ -504,22 +468,6 @@ function sanitizeRemoteState(payload) {
     chats: Array.isArray(payload.chats) ? payload.chats : defaults.chats,
     chatCalls: Array.isArray(payload.chatCalls) ? payload.chatCalls : defaults.chatCalls,
   };
-
-  return next;
-}
-
-function hasMeaningfulRemotePayload(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-  return (
-    Array.isArray(payload.employees) ||
-    Array.isArray(payload.requests) ||
-    Array.isArray(payload.users) ||
-    Array.isArray(payload.pending) ||
-    Array.isArray(payload.upgrades) ||
-    Array.isArray(payload.complaints) ||
-    Array.isArray(payload.chats) ||
-    Array.isArray(payload.chatCalls)
-  );
 }
 
 const translations = {
@@ -1047,7 +995,6 @@ export default function HRManagementApp() {
 
   const cloudEnabled = isRemoteSyncEnabled();
   const [cloudStatus, setCloudStatus] = useState(cloudEnabled ? "connecting" : "local");
-  const [cloudErrorMessage, setCloudErrorMessage] = useState("");
   const remoteReadyRef = useRef(!cloudEnabled);
   const applyingRemoteRef = useRef(false);
   const syncTimeoutRef = useRef(null);
@@ -1242,51 +1189,42 @@ export default function HRManagementApp() {
       chatCalls,
     });
 
-const forceRemoteSaveSnapshot = async (snapshotOverride = null) => {
-  if (!cloudEnabled || applyingRemoteRef.current) return false;
-  const snapshot = sanitizeRemoteState(snapshotOverride || buildCurrentRemoteSnapshot());
-  try {
-    setCloudStatus("syncing");
-    setCloudErrorMessage("");
-    const { data, error } = await upsertRemoteStateRow(snapshot);
-    if (error) throw error;
-    lastRemoteUpdatedAtRef.current = data?.updated_at || new Date().toISOString();
-    lastSeenRequestIdsRef.current = new Set((snapshot.requests || []).map((item) => item.id));
-    remoteReadyRef.current = true;
-    setCloudStatus("online");
-    return true;
-  } catch (error) {
-    console.error("Cloud sync save failed:", error);
-    remoteReadyRef.current = true;
-    setCloudStatus("error");
-    setCloudErrorMessage(error?.message || "Unknown sync error");
-    return false;
-  }
-};
-
-const getCloudStatusLabel = () => {
-  if (language === "ar") {
-    if (!cloudEnabled) return "المزامنة غير مفعلة - أضف بيانات Supabase";
-    if (cloudStatus === "online") return "متصل بقاعدة البيانات";
-    if (cloudStatus === "syncing") return "جاري المزامنة";
-    if (cloudStatus === "connecting") return "جاري الاتصال";
-    if (cloudStatus === "error") {
-      return cloudErrorMessage
-        ? `خطأ في المزامنة - ${cloudErrorMessage}`
-        : "خطأ في المزامنة - راجع مفاتيح Supabase و SQL";
+  const forceRemoteSaveSnapshot = async (snapshotOverride = null) => {
+    if (!cloudEnabled || applyingRemoteRef.current) return;
+    const snapshot = sanitizeRemoteState(snapshotOverride || buildCurrentRemoteSnapshot());
+    try {
+      setCloudStatus("syncing");
+      const { data, error } = await upsertRemoteStateRow(snapshot);
+      if (error) throw error;
+      lastRemoteUpdatedAtRef.current = data?.updated_at || new Date().toISOString();
+      lastSeenRequestIdsRef.current = new Set((snapshot.requests || []).map((item) => item.id));
+      remoteReadyRef.current = true;
+      setCloudStatus("online");
+    } catch (error) {
+      console.error("Cloud sync save failed:", error);
+      remoteReadyRef.current = false;
+      setCloudStatus("error");
     }
-    return "تخزين محلي فقط";
-  }
+  };
 
-  if (!cloudEnabled) return "Local only - add Supabase config";
-  if (cloudStatus === "online") return "Database connected";
-  if (cloudStatus === "syncing") return "Syncing";
-  if (cloudStatus === "connecting") return "Connecting";
-  if (cloudStatus === "error") {
-    return cloudErrorMessage ? `Sync error - ${cloudErrorMessage}` : "Sync error - check Supabase config";
-  }
-  return "Local storage only";
-};
+  const getCloudStatusIndicatorColor = () => {
+    if (!cloudEnabled) return "#ef4444";
+    if (cloudStatus === "online" || cloudStatus === "syncing") return "#22c55e";
+    return "#ef4444";
+  };
+
+  const getCloudStatusIndicatorTitle = () => {
+    if (language === "ar") {
+      if (!cloudEnabled) return "غير متصل بقاعدة البيانات";
+      if (cloudStatus === "online" || cloudStatus === "syncing") return "متصل بقاعدة البيانات";
+      return "غير متصل بقاعدة البيانات";
+    }
+
+    if (!cloudEnabled) return "Database disconnected";
+    if (cloudStatus === "online" || cloudStatus === "syncing") return "Database connected";
+    return "Database disconnected";
+  };
+
 
 
   const currentEmployeeRecord = useMemo(
@@ -1562,7 +1500,6 @@ useEffect(() => {
   if (!cloudEnabled) {
     remoteReadyRef.current = false;
     setCloudStatus("local");
-    setCloudErrorMessage("");
     return undefined;
   }
 
@@ -1570,7 +1507,6 @@ useEffect(() => {
 
   const loadRemoteState = async () => {
     setCloudStatus("connecting");
-    setCloudErrorMessage("");
     const defaults = buildDefaultRemoteState();
 
     try {
@@ -1579,27 +1515,23 @@ useEffect(() => {
       let { data, error } = await fetchRemoteStateRow();
       if (error) throw error;
 
-      const shouldSeedDefaults = !data || !hasMeaningfulRemotePayload(data?.payload);
-
-      if (shouldSeedDefaults) {
+      if (!data) {
         const created = await upsertRemoteStateRow(defaults);
         if (created.error) throw created.error;
         data = created.data || { payload: defaults, updated_at: new Date().toISOString() };
       }
 
       if (cancelled) return;
-      const snapshot = sanitizeRemoteState(data?.payload || defaults);
+      const snapshot = data?.payload || defaults;
       lastRemoteUpdatedAtRef.current = data?.updated_at || "";
       lastSeenRequestIdsRef.current = new Set((snapshot.requests || []).map((item) => item.id));
       applyRemoteSnapshot(snapshot);
       remoteReadyRef.current = true;
       setCloudStatus("online");
-      setCloudErrorMessage("");
     } catch (error) {
       console.error("Cloud sync init failed:", error);
       remoteReadyRef.current = false;
       setCloudStatus("error");
-      setCloudErrorMessage(error?.message || "Unknown sync error");
     }
   };
 
@@ -1628,11 +1560,8 @@ useEffect(() => {
       lastRemoteUpdatedAtRef.current = incomingUpdatedAt;
       applyRemoteSnapshot(nextPayload);
       setCloudStatus("online");
-      setCloudErrorMessage("");
     } catch (error) {
       console.error("Cloud sync poll failed:", error);
-      setCloudStatus("error");
-      setCloudErrorMessage(error?.message || "Unknown sync error");
     }
   };
 
@@ -1653,7 +1582,7 @@ useEffect(() => {
 }, [authUser?.role, cloudEnabled]);
 
 useEffect(() => {
-  if (!cloudEnabled || !remoteReadyRef.current || applyingRemoteRef.current) return undefined;
+  if (!cloudEnabled || !remoteReadyRef.current || applyingRemoteRef.current || cloudStatus === "error") return undefined;
 
   const snapshot = buildCurrentRemoteSnapshot();
 
@@ -1664,7 +1593,6 @@ useEffect(() => {
   syncTimeoutRef.current = window.setTimeout(async () => {
     try {
       setCloudStatus("syncing");
-      setCloudErrorMessage("");
       const { data, error } = await upsertRemoteStateRow(snapshot);
 
       if (error) throw error;
@@ -1674,7 +1602,6 @@ useEffect(() => {
     } catch (error) {
       console.error("Cloud sync save failed:", error);
       setCloudStatus("error");
-      setCloudErrorMessage(error?.message || "Unknown sync error");
     }
   }, 350);
 
@@ -3545,9 +3472,6 @@ useEffect(() => {
           </div>
 
           <div style={{ ...ui.heroActions, ...(isMobileView ? ui.heroActionsMobile : {}) }}>
-            {getCloudStatusLabel() && (
-            <div style={ui.cloudStatusBadge}>{getCloudStatusLabel()}</div>
-          )}
             {isAuthenticated && (
               <div style={{ ...ui.searchBox, ...(isMobileView ? ui.searchBoxMobile : {}) }}>
                 <Search size={16} />
@@ -3581,6 +3505,13 @@ useEffect(() => {
         </div>
       </Card>
 
+      <div
+        title={getCloudStatusIndicatorTitle()}
+        style={{
+          ...ui.syncStatusDot,
+          background: getCloudStatusIndicatorColor(),
+        }}
+      />
 
       {sidebarOpen && (
         <div style={ui.sidebarOverlay} onClick={() => setSidebarOpen(false)}>
@@ -5602,18 +5533,15 @@ const ui = {
     flexWrap: "wrap",
     alignItems: "center",
   },
-  cloudStatusBadge: {
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    minHeight: 42,
-    padding: "0 14px",
-    borderRadius: 999,
-    border: "1px solid var(--border)",
-    background: "var(--surface-soft)",
-    color: "var(--text-soft)",
-    fontSize: 13,
-    fontWeight: 700,
+  syncStatusDot: {
+    position: "fixed",
+    left: 14,
+    bottom: 14,
+    width: 10,
+    height: 10,
+    borderRadius: "50%",
+    boxShadow: "0 0 0 2px rgba(255,255,255,0.9), 0 2px 10px rgba(15,23,42,0.18)",
+    zIndex: 1300,
   },
   heroBadge: {
     display: "inline-flex",
