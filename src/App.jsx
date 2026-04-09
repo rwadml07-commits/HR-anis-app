@@ -3713,16 +3713,14 @@ useEffect(() => {
                     key={contact.id}
                     style={{ ...ui.chatContactItemWrap, ...(contactListMenuChatId === contact.id ? ui.chatContactItemWrapRaised : {}) }}
                   >
-                    {isMobileView && (
-                      <button
-                        type="button"
-                        style={ui.chatContactMenuButton}
-                        onClick={() => setContactListMenuChatId((prev) => prev === contact.id ? "" : contact.id)}
-                        title={chatLabels.more}
-                      >
-                        <MoreHorizontal size={18} />
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      style={{ ...ui.chatContactMenuButton, ...(!isMobileView ? ui.chatContactMenuButtonDesktop : {}) }}
+                      onClick={() => setContactListMenuChatId((prev) => prev === contact.id ? "" : contact.id)}
+                      title={chatLabels.more}
+                    >
+                      <MoreHorizontal size={18} />
+                    </button>
 
                     <button
                       type="button"
@@ -3751,8 +3749,8 @@ useEffect(() => {
                       </div>
                     </button>
 
-                    {isMobileView && contactListMenuChatId === contact.id && (
-                      <div style={ui.chatContactMenuPopup}>
+                    {contactListMenuChatId === contact.id && (
+                      <div style={{ ...ui.chatContactMenuPopup, ...(!isMobileView ? ui.chatContactMenuPopupDesktop : {}) }}>
                         <button type="button" style={ui.chatContactMenuItem} onClick={() => { toggleChatFlagById(contact.id, "pinnedBy"); setContactListMenuChatId(""); }}>
                           <Pin size={16} /> <span>{t.chatPinned}</span>
                         </button>
@@ -6056,6 +6054,11 @@ const ui = {
     justifyContent: "center",
     cursor: "pointer",
   },
+  chatContactMenuButtonDesktop: {
+    left: 16,
+    top: "50%",
+    transform: "translateY(-50%)",
+  },
   chatContactMenuPopup: {
     position: "absolute",
     left: 10,
@@ -6069,6 +6072,10 @@ const ui = {
     display: "grid",
     gap: 6,
     zIndex: 5,
+  },
+  chatContactMenuPopupDesktop: {
+    left: 16,
+    top: "calc(50% + 26px)",
   },
   chatContactMenuItem: {
     border: "none",
