@@ -622,6 +622,8 @@ const translations = {
     noReasonAvailable: "لا يوجد سبب مسجل",
     chatCreateGroup: "إنشاء قروب",
     chatGroupName: "اسم القروب",
+    chatGroupPhones: "أرقام الأعضاء",
+    chatGroupPhonesHint: "اكتب الأرقام مفصولة بفاصلة أو مسافة",
     chatStartCall: "اتصال صوتي",
     chatStartVideo: "اتصال فيديو",
     chatVoiceNote: "رسالة صوتية",
@@ -772,6 +774,8 @@ const translations = {
     sendMessage: "Send message",
     chatCreateGroup: "Create group",
     chatGroupName: "Group name",
+    chatGroupPhones: "Member phone numbers",
+    chatGroupPhonesHint: "Enter numbers separated by comma or space",
     chatStartCall: "Voice call",
     chatStartVideo: "Video call",
     chatVoiceNote: "Voice note",
@@ -1012,7 +1016,7 @@ export default function HRManagementApp() {
   const [activeChatId, setActiveChatId] = useState("");
   const [chatFilter, setChatFilter] = useState("all");
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
-  const [groupForm, setGroupForm] = useState({ name: "", members: [] });
+  const [groupForm, setGroupForm] = useState({ name: "", members: [], phoneNumbers: "" });
   const [ongoingCall, setOngoingCall] = useState(null);
   const [selectedMessage, setSelectedMessage] = useState(null);
   const [messageMenuOpen, setMessageMenuOpen] = useState(false);
@@ -2351,21 +2355,38 @@ useEffect(() => {
   };
 
   const createGroupChat = () => {
-    if (!authUser || !groupForm.name.trim() || groupForm.members.length < 1) return;
+    if (!authUser || !groupForm.name.trim()) return;
+
+    const typedPhones = String(groupForm.phoneNumbers || "")
+      .split(/[\s,،;\n]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    const validPhones = Array.from(new Set(
+      [...groupForm.members, ...typedPhones].filter((phone) =>
+        phone !== authUser.phone && systemUsers.some((user) => user.phone === phone)
+      )
+    ));
+
+    if (validPhones.length < 1) return;
+
     const nextGroup = {
       id: `group-${Date.now()}`,
       type: "group",
       name: groupForm.name.trim(),
-      participants: [authUser.phone, ...groupForm.members],
+      participants: [authUser.phone, ...validPhones],
       admins: [authUser.phone],
       pinnedBy: [],
       mutedBy: [],
+      archivedBy: [],
+      unreadBy: [],
       messages: [createChatMessage({ type: "system", system: true, text: `${t.chatGroupCreated}: ${groupForm.name.trim()}` })],
     };
     setChats((prev) => [nextGroup, ...prev]);
     setGroupDialogOpen(false);
-    setGroupForm({ name: "", members: [] });
+    setGroupForm({ name: "", members: [], phoneNumbers: "" });
     setActiveChatId(nextGroup.id);
+    if (isMobileView) setMobileChatView("conversation");
   };
 
   const toggleActiveChatPin = () => toggleActiveChatFlag("pinnedBy");
@@ -3702,7 +3723,7 @@ useEffect(() => {
                 <div style={ui.chatFilterBar}>
                   <button type="button" onClick={() => setChatFilter("all")} style={{ ...ui.chatFilterChip, ...(chatFilter === "all" ? ui.chatFilterChipActive : {}) }}>{t.chatAll}</button>
                   <button type="button" onClick={() => setChatFilter("groups")} style={{ ...ui.chatFilterChip, ...(chatFilter === "groups" ? ui.chatFilterChipActive : {}) }}>{t.chatGroups}</button>
-                  <button type="button" onClick={() => setChatFilter("direct")} style={{ ...ui.chatFilterChip, ...(chatFilter === "direct" ? ui.chatFilterChipActive : {}) }}>{t.chatDirect}</button>
+                  <button type="button" onClick={() => { setGroupDialogOpen(true); setContactListMenuChatId(""); }} style={ui.chatFilterChip}>{t.chatCreateGroup}</button>
                   <button type="button" onClick={() => setChatFilter("archived")} style={{ ...ui.chatFilterChip, ...(chatFilter === "archived" ? ui.chatFilterChipActive : {}) }}>{chatLabels.archived}</button>
                 </div>
               </div>
@@ -3756,6 +3777,9 @@ useEffect(() => {
                         </button>
                         <button type="button" style={ui.chatContactMenuItem} onClick={() => { toggleChatFlagById(contact.id, "mutedBy"); setContactListMenuChatId(""); }}>
                           <BellOff size={16} /> <span>{t.chatMuted}</span>
+                        </button>
+                        <button type="button" style={ui.chatContactMenuItem} onClick={() => { toggleChatFlagById(contact.id, "archivedBy"); setContactListMenuChatId(""); }}>
+                          <Archive size={16} /> <span>{chatLabels.archived}</span>
                         </button>
                         <button type="button" style={ui.chatContactMenuItem} onClick={() => { toggleChatFlagById(contact.id, "blockedBy"); setContactListMenuChatId(""); }}>
                           <Lock size={16} /> <span>{(contact.blockedBy || []).includes(authUser?.phone) ? chatLabels.unblock : chatLabels.block}</span>
@@ -4998,24 +5022,33 @@ useEffect(() => {
           <Field label={t.chatGroupName} full>
             <Input value={groupForm.name} onChange={(e) => setGroupForm((prev) => ({ ...prev, name: e.target.value }))} />
           </Field>
+          <Field label={chatLabels.searchByPhone} full>
+            <Textarea
+              rows={3}
+              placeholder={t.chatGroupPhonesHint}
+              value={groupForm.phoneNumbers || ""}
+              onChange={(e) => setGroupForm((prev) => ({ ...prev, phoneNumbers: e.target.value }))}
+            />
+          </Field>
           <Field label={t.chatMembers} full>
             <div style={ui.groupMemberGrid}>
               {availableGroupMembers.map((member) => {
-                const checked = groupForm.members.includes(member.participants[1]);
+                const memberPhone = member.participants.find((phone) => phone !== authUser?.phone) || member.participants[1];
+                const checked = groupForm.members.includes(memberPhone);
                 return (
                   <label key={member.id} style={{ ...ui.groupMemberChip, ...(checked ? ui.groupMemberChipActive : {}) }}>
                     <input
                       type="checkbox"
                       checked={checked}
                       onChange={(e) => {
-                        const value = member.participants[1];
+                        const value = memberPhone;
                         setGroupForm((prev) => ({
                           ...prev,
                           members: e.target.checked ? [...prev.members, value] : prev.members.filter((item) => item !== value),
                         }));
                       }}
                     />
-                    <span>{member.name}</span>
+                    <span>{member.name} - {memberPhone}</span>
                   </label>
                 );
               })}
