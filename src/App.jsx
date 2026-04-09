@@ -3803,13 +3803,17 @@ useEffect(() => {
                       </div>
                     </div>
                     <div style={{ ...ui.chatHeaderTools, ...(isMobileView ? ui.chatHeaderToolsMobile : {}) }}>
-                      {!isMobileView && <button type="button" style={ui.chatHeaderIconButton} onClick={toggleActiveChatPin} title={t.chatPinned}><Pin size={18} /></button>}
-                      {!isMobileView && <button type="button" style={ui.chatHeaderIconButton} onClick={toggleActiveChatMute} title={t.chatMuted}><BellOff size={18} /></button>}
-                      <button type="button" style={ui.chatHeaderIconButton} onClick={() => setChatMoreOpen(true)} title={chatLabels.more}><MoreHorizontal size={18} /></button>
-                      {!isMobileView && <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                        <Badge>{activeConversation.branch}</Badge>
-                        <span style={ui.chatTimeMuted}>{formatChatTime(activeConversation.lastMessage?.sentAt)}</span>
-                      </div>}
+                      <button type="button" style={{ ...ui.chatHeaderIconButton, ...(isMobileView ? ui.chatHeaderIconButtonMobile : {}) }} onClick={toggleActiveChatPin} title={t.chatPinned}><Pin size={isMobileView ? 16 : 18} /></button>
+                      <button type="button" style={{ ...ui.chatHeaderIconButton, ...(isMobileView ? ui.chatHeaderIconButtonMobile : {}) }} onClick={toggleActiveChatMute} title={t.chatMuted}><BellOff size={isMobileView ? 16 : 18} /></button>
+                      <button type="button" style={{ ...ui.chatHeaderIconButton, ...(isMobileView ? ui.chatHeaderIconButtonMobile : {}) }} onClick={() => setChatMoreOpen(true)} title={chatLabels.more}><MoreHorizontal size={isMobileView ? 16 : 18} /></button>
+                      {isMobileView ? (
+                        <span style={ui.chatHeaderMobileTime}>{formatChatTime(activeConversation.lastMessage?.sentAt)}</span>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+                          <Badge>{activeConversation.branch}</Badge>
+                          <span style={ui.chatTimeMuted}>{formatChatTime(activeConversation.lastMessage?.sentAt)}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -3918,17 +3922,17 @@ useEffect(() => {
                     </div>
                   ) : (
                   <div style={{ ...ui.chatComposerLarge, ...(isMobileView ? ui.chatComposerMobile : {}) }}>
-                    <button type="button" style={ui.chatComposerEdgeButton} onClick={() => setAttachSheetOpen(true)} title={t.chatAttach}>
-                      <Plus size={24} />
+                    <button type="button" style={{ ...ui.chatComposerEdgeButton, ...(isMobileView ? ui.chatComposerEdgeButtonMobile : {}) }} onClick={() => setAttachSheetOpen(true)} title={t.chatAttach}>
+                      <Plus size={isMobileView ? 20 : 24} />
                     </button>
-                    <button type="button" style={ui.chatComposerEdgeButton} onClick={openChatCamera} title={t.chatPhoto}>
-                      <Camera size={22} />
+                    <button type="button" style={{ ...ui.chatComposerEdgeButton, ...(isMobileView ? ui.chatComposerEdgeButtonMobile : {}) }} onClick={openChatCamera} title={t.chatPhoto}>
+                      <Camera size={isMobileView ? 18 : 22} />
                     </button>
-                    <button type="button" style={ui.chatComposerEdgeButton} onClick={startVoiceRecording} title={t.chatVoiceNote}>
-                      <Mic size={22} />
+                    <button type="button" style={{ ...ui.chatComposerEdgeButton, ...(isMobileView ? ui.chatComposerEdgeButtonMobile : {}) }} onClick={startVoiceRecording} title={t.chatVoiceNote}>
+                      <Mic size={isMobileView ? 18 : 22} />
                     </button>
                     <input
-                      style={ui.chatComposerInput}
+                      style={{ ...ui.chatComposerInput, ...(isMobileView ? ui.chatComposerInputMobile : {}) }}
                       value={chatDraft}
                       onChange={(e) => setChatDraft(e.target.value)}
                       onKeyDown={(e) => {
@@ -3939,8 +3943,8 @@ useEffect(() => {
                       }}
                       placeholder={t.chatWrite}
                     />
-                    <button type="button" style={ui.chatSendButton} onClick={sendChatMessage} title={t.sendMessage}>
-                      <Send size={18} />
+                    <button type="button" style={{ ...ui.chatSendButton, ...(isMobileView ? ui.chatSendButtonMobile : {}) }} onClick={sendChatMessage} title={t.sendMessage}>
+                      <Send size={isMobileView ? 16 : 18} />
                     </button>
                   </div>
                   )}
@@ -5991,15 +5995,21 @@ const ui = {
     borderRadius: 22,
   },
   chatHeaderBarMobile: {
-    padding: "14px 12px",
-    flexDirection: "column",
-    alignItems: "stretch",
-    gap: 12,
+    padding: "12px 10px",
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
   },
   chatHeaderToolsMobile: {
-    gap: 8,
+    gap: 6,
     justifyContent: "flex-start",
     flexWrap: "nowrap",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    alignSelf: "flex-start",
+    direction: "ltr",
+    flexShrink: 0,
   },
   chatContactItemWrap: {
     position: "relative",
@@ -6127,7 +6137,8 @@ const ui = {
     gap: 8,
   },
   chatComposerMobile: {
-    padding: 10,
+    padding: 8,
+    gap: 4,
   },
   chatHeaderBackButton: {
     width: 38,
@@ -6359,10 +6370,11 @@ const ui = {
   },
   chatHeaderIdentityMobile: {
     display: "grid",
-    gridTemplateColumns: "40px 56px minmax(0,1fr)",
+    gridTemplateColumns: "40px 52px minmax(0,1fr)",
     alignItems: "center",
-    gap: 10,
-    width: "100%",
+    gap: 8,
+    flex: 1,
+    minWidth: 0,
   },
   chatHeaderName: {
     fontSize: 18,
@@ -6398,6 +6410,18 @@ const ui = {
     alignItems: "center",
     justifyContent: "center",
     cursor: "pointer",
+  },
+  chatHeaderIconButtonMobile: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+  },
+  chatHeaderMobileTime: {
+    fontSize: 12,
+    color: "var(--text-muted)",
+    lineHeight: 1.2,
+    textAlign: "center",
+    width: 38,
   },
   chatCallBanner: {
     margin: "14px 16px 0",
@@ -6579,6 +6603,12 @@ const ui = {
     fontSize: 15,
     outline: "none",
   },
+  chatComposerInputMobile: {
+    minHeight: 44,
+    borderRadius: 14,
+    padding: "0 12px",
+    fontSize: 14,
+  },
   chatSendButton: {
     width: 56,
     height: 56,
@@ -6592,6 +6622,12 @@ const ui = {
     justifyContent: "center",
     cursor: "pointer",
     boxShadow: "0 16px 32px rgba(0, 136, 204, 0.24)",
+  },
+  chatSendButtonMobile: {
+    width: 44,
+    height: 44,
+    minWidth: 44,
+    borderRadius: 14,
   },
   chatEmptyMain: {
     minHeight: 320,
@@ -6741,6 +6777,12 @@ const ui = {
     alignItems: "center",
     justifyContent: "center",
     cursor: "pointer",
+  },
+  chatComposerEdgeButtonMobile: {
+    width: 38,
+    height: 38,
+    minWidth: 38,
+    borderRadius: 12,
   },
   voiceRecorderBar: {
     display: "flex",
