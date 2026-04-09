@@ -5996,10 +5996,13 @@ const ui = {
   },
   chatHeaderBarMobile: {
     padding: "12px 10px",
+    paddingLeft: 10,
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
     gap: 10,
+    position: "relative",
+    overflow: "visible",
   },
   chatHeaderToolsMobile: {
     gap: 6,
@@ -6010,6 +6013,10 @@ const ui = {
     alignSelf: "flex-start",
     direction: "ltr",
     flexShrink: 0,
+    position: "absolute",
+    left: -46,
+    top: 10,
+    zIndex: 3,
   },
   chatContactItemWrap: {
     position: "relative",
@@ -6137,8 +6144,8 @@ const ui = {
     gap: 8,
   },
   chatComposerMobile: {
-    padding: 8,
-    gap: 4,
+    padding: 6,
+    gap: 2,
   },
   chatHeaderBackButton: {
     width: 38,
@@ -6412,16 +6419,17 @@ const ui = {
     cursor: "pointer",
   },
   chatHeaderIconButtonMobile: {
-    width: 38,
-    height: 38,
+    width: 36,
+    height: 36,
     borderRadius: 12,
+    boxShadow: "0 8px 18px rgba(15, 23, 42, 0.08)",
   },
   chatHeaderMobileTime: {
-    fontSize: 12,
+    fontSize: 11,
     color: "var(--text-muted)",
     lineHeight: 1.2,
     textAlign: "center",
-    width: 38,
+    width: 36,
   },
   chatCallBanner: {
     margin: "14px 16px 0",
@@ -6604,9 +6612,9 @@ const ui = {
     outline: "none",
   },
   chatComposerInputMobile: {
-    minHeight: 44,
+    minHeight: 40,
     borderRadius: 14,
-    padding: "0 12px",
+    padding: "0 10px",
     fontSize: 14,
   },
   chatSendButton: {
@@ -6624,10 +6632,10 @@ const ui = {
     boxShadow: "0 16px 32px rgba(0, 136, 204, 0.24)",
   },
   chatSendButtonMobile: {
-    width: 44,
-    height: 44,
-    minWidth: 44,
-    borderRadius: 14,
+    width: 38,
+    height: 38,
+    minWidth: 38,
+    borderRadius: 12,
   },
   chatEmptyMain: {
     minHeight: 320,
@@ -6779,10 +6787,10 @@ const ui = {
     cursor: "pointer",
   },
   chatComposerEdgeButtonMobile: {
-    width: 38,
-    height: 38,
-    minWidth: 38,
-    borderRadius: 12,
+    width: 32,
+    height: 32,
+    minWidth: 32,
+    borderRadius: 10,
   },
   voiceRecorderBar: {
     display: "flex",
