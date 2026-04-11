@@ -5580,12 +5580,12 @@ useEffect(() => {
             description={language === "ar" ? "متابعة الحضور والانصراف والتأخير مع فلترة حسب التاريخ والموظف وتصدير إلى Excel." : "Track attendance, exit times, and delays with employee/date filters and Excel export."}
           />
 
-          <div style={{ ...ui.grid2, ...(isMobileView ? ui.grid2Mobile : {}), marginBottom: 18 }}>
+          <div style={{ ...ui.attendanceFiltersWrap, ...(isMobileView ? ui.attendanceFiltersWrapMobile : {}) }}>
             <Field label={language === "ar" ? "التاريخ" : "Date"}>
               <div style={{ display: "grid", gap: 8 }}>
                 <Input type="date" value={attendanceDateFilter} onChange={(e) => setAttendanceDateFilter(e.target.value)} />
                 {isEmployee ? (
-                  <Button variant="outline" onClick={() => setAttendanceDateFilter("")} style={ui.smallBtn}>
+                  <Button variant="outline" onClick={() => setAttendanceDateFilter("")} style={{ ...ui.smallBtn, ...(isMobileView ? ui.attendanceActionButtonMobile : {}) }}>
                     {language === "ar" ? "عرض كل الأيام" : "Show all days"}
                   </Button>
                 ) : null}
@@ -5607,7 +5607,7 @@ useEffect(() => {
             )}
           </div>
 
-          <div style={{ display: "flex", justifyContent: language === "ar" ? "flex-start" : "flex-end", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+          <div style={{ ...ui.attendanceActionsRow, ...(isMobileView ? ui.attendanceActionsRowMobile : {}) }}>
             {canManageAll && (
               <>
                 <input
@@ -5617,12 +5617,12 @@ useEffect(() => {
                   onChange={handleAttendanceUploadToSystem}
                   style={{ display: "none" }}
                 />
-                <Button variant="outline" onClick={openAttendanceUploadPicker}>
+                <Button variant="outline" onClick={openAttendanceUploadPicker} style={isMobileView ? ui.attendanceActionButtonMobile : undefined}>
                   <Download size={16} /> {language === "ar" ? "تنزيل التقرير للسستم" : "Upload Report to System"}
                 </Button>
               </>
             )}
-            <Button onClick={exportAttendanceReport} disabled={!attendanceRows.length}>
+            <Button onClick={exportAttendanceReport} disabled={!attendanceRows.length} style={isMobileView ? ui.attendanceActionButtonMobile : undefined}>
               <Download size={16} /> {language === "ar" ? "تصدير Excel" : "Export Excel"}
             </Button>
           </div>
@@ -8380,6 +8380,32 @@ const ui = {
   grid2Mobile: {
     gridTemplateColumns: "minmax(0, 1fr)",
     gap: 12,
+  },
+  attendanceFiltersWrap: {
+    display: "grid",
+    gap: 14,
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    alignItems: "end",
+    marginBottom: 18,
+  },
+  attendanceFiltersWrapMobile: {
+    gridTemplateColumns: "minmax(0, 1fr)",
+    gap: 14,
+  },
+  attendanceActionsRow: {
+    display: "flex",
+    justifyContent: "flex-start",
+    gap: 10,
+    flexWrap: "wrap",
+    marginBottom: 18,
+  },
+  attendanceActionsRowMobile: {
+    display: "grid",
+    gridTemplateColumns: "minmax(0, 1fr)",
+    gap: 10,
+  },
+  attendanceActionButtonMobile: {
+    width: "100%",
   },
   grid3: {
     display: "grid",
