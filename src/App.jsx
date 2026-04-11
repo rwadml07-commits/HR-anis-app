@@ -467,6 +467,7 @@ function buildDefaultRemoteState() {
     chats: initialChats.map((chat) => ({ ...chat })),
     chatCalls: initialChatCalls.map((call) => ({ ...call })),
     feedback: initialFeedbackEntries.map((item) => ({ ...item })),
+    attendanceReports: readStorage(STORAGE_KEYS.attendanceReports, [], isArray),
   };
 }
 
@@ -497,6 +498,7 @@ function sanitizeRemoteState(payload) {
     chats: Array.isArray(payload.chats) ? payload.chats : defaults.chats,
     chatCalls: Array.isArray(payload.chatCalls) ? payload.chatCalls : defaults.chatCalls,
     feedback: Array.isArray(payload.feedback) ? payload.feedback : defaults.feedback,
+    attendanceReports: Array.isArray(payload.attendanceReports) ? payload.attendanceReports : defaults.attendanceReports,
   };
 }
 
@@ -1476,6 +1478,10 @@ export default function HRManagementApp() {
     setChats(next.chats);
     setChatCalls(next.chatCalls);
     setFeedbackEntries(next.feedback);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(STORAGE_KEYS.attendanceReports, JSON.stringify(Array.isArray(next.attendanceReports) ? next.attendanceReports : []));
+    }
+    setAttendanceReportsVersion((prev) => prev + 1);
     window.setTimeout(() => {
       applyingRemoteRef.current = false;
     }, 0);
@@ -1492,6 +1498,7 @@ export default function HRManagementApp() {
       chats,
       chatCalls,
       feedback: feedbackEntries,
+      attendanceReports: readStorage(STORAGE_KEYS.attendanceReports, [], isArray),
     });
 
   const forceRemoteSaveSnapshot = async (snapshotOverride = null) => {
@@ -1871,6 +1878,10 @@ useEffect(() => {
 
       if (cancelled) return;
       const snapshot = data?.payload || defaults;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(STORAGE_KEYS.attendanceReports, JSON.stringify(Array.isArray(snapshot?.attendanceReports) ? snapshot.attendanceReports : []));
+        setAttendanceReportsVersion((prev) => prev + 1);
+      }
       lastRemoteUpdatedAtRef.current = data?.updated_at || "";
       lastSeenRequestIdsRef.current = new Set((snapshot.requests || []).map((item) => item.id));
       applyRemoteSnapshot(snapshot);
@@ -2697,6 +2708,8 @@ useEffect(() => {
         complaints,
         chats,
         chatCalls,
+        feedback: feedbackEntries,
+        attendanceReports: nextReports,
       });
       setAttendanceUploadStatus(language === "ar"
         ? `تم رفع الملف: ${file.name} — تم احتساب التأخير والغياب والإجازات تلقائيًا وإنشاء طلبات خصم بانتظار الاعتماد.`
@@ -5636,7 +5649,20 @@ useEffect(() => {
           ) : isMobileView ? (
             <div style={ui.mobileCardsStack}>
               {attendanceRows.map((row) => (
-                <MobileDataCard key={row.id} title={row.name} action={!isEmployee ? <Button variant="outline" style={ui.smallBtn} onClick={() => openAttendanceHistoryModal(row)}>{language === "ar" ? "السجل" : "History"}</Button> : null}>
+                <MobileDataCard
+                  key={row.id}
+                  title={row.name}
+                  action={!isEmployee ? (
+                    <Button
+                      variant="outline"
+                      style={{ ...ui.smallBtn, width: "100%" }}
+                      onClick={() => openAttendanceHistoryModal(row)}
+                    >
+                      {language === "ar" ? "السجل" : "History"}
+                    </Button>
+                  ) : null}
+                >
+                  <MobileFieldRow label={language === "ar" ? "التاريخ" : "Date"} value={row.date || "-"} />
                   <MobileFieldRow label={language === "ar" ? "الإدارة" : "Department"} value={row.department} />
                   <MobileFieldRow label={language === "ar" ? "الدخول المجدول" : "Scheduled in"} value={row.scheduledIn} />
                   <MobileFieldRow label={language === "ar" ? "الخروج المجدول" : "Scheduled out"} value={row.scheduledOut} />
@@ -5644,6 +5670,7 @@ useEffect(() => {
                   <MobileFieldRow label={language === "ar" ? "الخروج الفعلي" : "Actual out"} value={row.actualOut} />
                   <MobileFieldRow label={language === "ar" ? "التأخير" : "Delay"} value={row.delayLabel} accent />
                   <MobileFieldRow label={language === "ar" ? "الحالة" : "Status"} value={row.status} />
+                  <MobileFieldRow label={language === "ar" ? "ملاحظة" : "Note"} value={row.reason || "-"} />
                 </MobileDataCard>
               ))}
             </div>
@@ -8691,9 +8718,11 @@ const ui = {
   mobileCardsStack: {
     display: "grid",
     gap: 14,
+    gridTemplateColumns: "minmax(0, 1fr)",
   },
   mobileDataCard: {
     padding: 16,
+    width: "100%",
     borderRadius: 22,
     border: "1px solid var(--border)",
     background: "var(--surface)",
