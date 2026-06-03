@@ -396,6 +396,18 @@ const emptyAdvanceSettlementForm = { deductionMode: "automatic", valueType: "amo
 const emptyComplaintForm = { type: "شكوى", targetCategory: "owner", targetValue: "", subject: "", body: "", images: [] };
 
 
+function getViteEnv(key) {
+  // Safely read Vite/Vercel env vars without breaking the artifact sandbox
+  // (where import.meta.env is unavailable). Returns "" if not present.
+  try {
+    // eslint-disable-next-line no-new-func
+    const env = new Function("try { return import.meta.env; } catch (e) { return undefined; }")();
+    return (env && env[key]) || "";
+  } catch (e) {
+    return "";
+  }
+}
+
 function getSupabaseUrl() {
   return (
     (typeof window !== "undefined" && (
@@ -403,6 +415,7 @@ function getSupabaseUrl() {
       window.localStorage?.getItem("HR_SUPABASE_URL") ||
       window.localStorage?.getItem("VITE_SUPABASE_URL")
     )) ||
+    getViteEnv("VITE_SUPABASE_URL") ||
     ""
   );
 }
@@ -414,6 +427,7 @@ function getSupabaseAnonKey() {
       window.localStorage?.getItem("HR_SUPABASE_ANON_KEY") ||
       window.localStorage?.getItem("VITE_SUPABASE_ANON_KEY")
     )) ||
+    getViteEnv("VITE_SUPABASE_ANON_KEY") ||
     ""
   );
 }
@@ -8610,7 +8624,7 @@ const ui = {
     gap: 12,
     boxSizing: "border-box",
     width: "100%",
-    maxWidth: 1280,
+    maxWidth: 1600,
     margin: "0 auto",
     overflowX: "hidden",
   },
