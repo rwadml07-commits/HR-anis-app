@@ -233,15 +233,15 @@ const initialComplaints = [];
 
 const initialChats = [
   {
-    id: "direct-0910000000-0912026390",
+    id: "direct-0910000000-0950000000",
     type: "direct",
-    participants: ["0912026390", "0910000000"],
-    pinnedBy: ["0912026390"],
+    participants: ["0950000000", "0910000000"],
+    pinnedBy: ["0950000000"],
     mutedBy: [],
     messages: [
       {
         id: 11,
-        senderPhone: "0912026390",
+        senderPhone: "0950000000",
         type: "text",
         text: "مرحبًا، نبي متابعة سريعة على الطلبات اليوم.",
         sentAt: "2026-04-07T09:15:00",
@@ -275,8 +275,8 @@ const initialChats = [
     id: "group-tripoli-ops",
     type: "group",
     name: "فريق طرابلس",
-    participants: ["0912026390", "0910000000", "0912345678", "0941111111"],
-    admins: ["0912026390", "0910000000"],
+    participants: ["0950000000", "0910000000", "0912345678", "0941111111"],
+    admins: ["0950000000", "0910000000"],
     pinnedBy: ["0912345678"],
     mutedBy: [],
     messages: [
@@ -303,7 +303,7 @@ const initialFeedbackEntries = [];
 const PROGRAMMER_ACCOUNT_PHONE = "مبرمجR1";
 
 const initialSystemUsers = [
-  { phone: "0912026390", password: "12345678", role: "owner", name: "المالك", managedDepartment: "all", managedBranch: "all", mustChangePassword: false, passwordChangedOnce: true },
+  { phone: "0950000000", password: "12345678", role: "owner", name: "المالك", managedDepartment: "all", managedBranch: "all", mustChangePassword: false, passwordChangedOnce: true },
   { phone: "0910000000", password: "999999", role: "hr", name: "موظف HR", managedDepartment: "all", managedBranch: "all", mustChangePassword: false, passwordChangedOnce: true },
   { phone: "0941111111", password: "444444", role: "branch_manager", name: "خالد فرج", managedDepartment: "all", managedBranch: "طرابلس", mustChangePassword: false, passwordChangedOnce: true },
   { phone: "0942222222", password: "555555", role: "department_manager", name: "منى عبدالسلام", managedDepartment: "الحسابات", managedBranch: "بنغازي", mustChangePassword: false, passwordChangedOnce: true },
@@ -315,7 +315,21 @@ const initialSystemUsers = [
 
 function mergeSystemUsersWithHiddenAccounts(list) {
   const incoming = Array.isArray(list) ? list.map((user) => ({ ...user })) : [];
-  const byPhone = new Map(incoming.map((user) => [String(user?.phone || '').trim(), user]));
+  const defaultOwner = initialSystemUsers.find((u) => u.role === "owner" && !isHiddenAccount(u));
+  const ownerPhone = String(defaultOwner?.phone || "").trim();
+  // Drop any stale primary-owner account whose phone differs from the current
+  // default owner phone (e.g. an old number kept from a previous session).
+  const filtered = incoming.filter((user) => {
+    if (user?.role === "owner" && !isHiddenAccount(user)) {
+      return String(user?.phone || "").trim() === ownerPhone;
+    }
+    return true;
+  });
+  const byPhone = new Map(filtered.map((user) => [String(user?.phone || '').trim(), user]));
+  // Always ensure the default owner account exists with the correct phone/password.
+  if (defaultOwner && ownerPhone) {
+    byPhone.set(ownerPhone, { ...defaultOwner, ...(byPhone.get(ownerPhone) || {}), phone: ownerPhone, role: "owner" });
+  }
   initialSystemUsers.forEach((defaultUser) => {
     const key = String(defaultUser?.phone || '').trim();
     if (!key) return;
@@ -342,6 +356,8 @@ const emptyForm = {
   leaveBalance: "",
   workHours: "",
   shift: "morning",
+  requiredHours: "",
+  requiredMinutes: "",
   fromHour: "",
   toHour: "",
   attendanceLateDeductionMode: "automatic",
@@ -509,6 +525,8 @@ function normalizeEmployeesCollection(list) {
     ? list.map((emp) => ({
         ...emp,
         fingerprintId: String(emp?.fingerprintId ?? "").trim(),
+        requiredHours: Number(emp?.requiredHours ?? 0),
+        requiredMinutes: Number(emp?.requiredMinutes ?? 0),
         basicSalary: Number(emp?.basicSalary ?? emp?.salary ?? 0),
         salary: Number(emp?.salary ?? 0),
         advance: Number(emp?.advance ?? 0),
@@ -1318,6 +1336,7 @@ export default function HRManagementApp() {
   const [attendanceEmployeeFilter, setAttendanceEmployeeFilter] = useState("all");
   const [attendanceUploadStatus, setAttendanceUploadStatus] = useState("");
   const [lastUploadedRows, setLastUploadedRows] = useState([]);
+  const [transactionToDelete, setTransactionToDelete] = useState(null);
   const [importEmployeesStatus, setImportEmployeesStatus] = useState("");
   const [attendanceReportsVersion, setAttendanceReportsVersion] = useState(0);
   const [attendanceHistoryModalOpen, setAttendanceHistoryModalOpen] = useState(false);
@@ -1429,6 +1448,7 @@ export default function HRManagementApp() {
   const [rewardRequestForm, setRewardRequestForm] = useState(emptyRewardRequestForm);
   const [upgradeRequestForm, setUpgradeRequestForm] = useState(emptyUpgradeRequestForm);
   const [salaryDepositForm, setSalaryDepositForm] = useState(emptySalaryDepositForm);
+  const [salaryDepositStep, setSalaryDepositStep] = useState(1);
   const [advanceSettlementForm, setAdvanceSettlementForm] = useState(emptyAdvanceSettlementForm);
   const [complaintForm, setComplaintForm] = useState(emptyComplaintForm);
 
@@ -1792,8 +1812,8 @@ export default function HRManagementApp() {
       }
 
       select option {
-        background: ${themeMode === "dark" ? "#101c33" : "#ffffff"} !important;
-        color: ${themeMode === "dark" ? "#f8fafc" : "#0f172a"} !important;
+        background: ${themeMode === "dark" ? "#282b2e" : "#ffffff"} !important;
+        color: ${themeMode === "dark" ? "#eceef0" : "#0f172a"} !important;
       }
 
       textarea,
@@ -1806,21 +1826,21 @@ export default function HRManagementApp() {
     const root = document.documentElement;
     const vars = themeMode === "dark"
       ? {
-          "--bg": "#1b1713",
-          "--surface": "#241e18",
-          "--surface-soft": "#2a231c",
-          "--surface-muted": "#322a21",
-          "--border": "#3c3328",
-          "--text": "#efe6d7",
-          "--text-soft": "#c3b6a3",
-          "--text-muted": "#8f8170",
+          "--bg": "#1f2123",
+          "--surface": "#282b2e",
+          "--surface-soft": "#303437",
+          "--surface-muted": "#3a3e42",
+          "--border": "#454a4f",
+          "--text": "#eceef0",
+          "--text-soft": "#bcc1c6",
+          "--text-muted": "#8b9196",
           "--primary": "#d98a3d",
           "--primary-contrast": "#1b1713",
           "--accent": "#d98a3d",
           "--accent-soft": "rgba(217, 138, 61, 0.16)",
           "--accent-border": "rgba(217, 138, 61, 0.42)",
           "--ring": "rgba(217, 138, 61, 0.30)",
-          "--shadow": "0 18px 44px rgba(0, 0, 0, 0.55)",
+          "--shadow": "0 18px 44px rgba(0, 0, 0, 0.40)",
         }
       : {
           "--bg": "#f4efe5",
@@ -2130,7 +2150,9 @@ useEffect(() => {
       const actualInValue = approvedLate?.lateTo || emp.fromHour || "-";
       const actualOutValue = approvedLate?.compensateAt || emp.toHour || "-";
       const actualInMinutes = timeToMinutes(approvedLate?.lateTo || emp.fromHour);
-      const delayMinutes = plannedInMinutes != null && actualInMinutes != null ? Math.max(0, actualInMinutes - plannedInMinutes) : 0;
+      // Hourly (flexible) employees have no fixed arrival time, so no late minutes.
+      const isHourly = emp.shift === "hourly";
+      const delayMinutes = isHourly ? 0 : (plannedInMinutes != null && actualInMinutes != null ? Math.max(0, actualInMinutes - plannedInMinutes) : 0);
 
       return {
         id: `${emp.id}-${attendanceDateFilter}`,
@@ -2666,6 +2688,7 @@ useEffect(() => {
       : (employee.attendanceAbsenceValueType || "amount");
     const configuredValue = Math.max(0, Number(kind === "late" ? employee.attendanceLateValue || 0 : employee.attendanceAbsenceValue || 0));
 
+    if (deductionMode === "none") return 0;
     if (deductionMode === "manual") return 0;
     if (valueType === "percentage") {
       return Math.max(0, (salaryBase * configuredValue) / 100);
@@ -4404,6 +4427,61 @@ useEffect(() => {
     setNotificationDialogOpen(true);
   };
 
+  const deleteStatementTransaction = (requestItem) => {
+    if (!requestItem) return;
+    if (!canManageAll) return;
+    setTransactionToDelete(requestItem);
+  };
+
+  const confirmDeleteTransaction = () => {
+    const requestItem = transactionToDelete;
+    if (!requestItem || !canManageAll) { setTransactionToDelete(null); return; }
+
+    const targetPhone = String(requestItem.employeePhone || "");
+
+    // Reverse the balance effect on emp.advance for the relevant types.
+    if (requestItem.status === "معتمد") {
+      if (requestItem.type === "سلفة") {
+        const amt = Number(requestItem.amount || 0);
+        setEmployees((prev) => prev.map((emp) => emp.phone === targetPhone
+          ? { ...emp, advance: Math.max(0, Number(emp.advance || 0) - amt) }
+          : emp));
+      } else if (requestItem.type === "إنزال مرتب") {
+        const settled = Number(requestItem.advanceSettledAmount || 0);
+        setEmployees((prev) => prev.map((emp) => emp.phone === targetPhone
+          ? {
+              ...emp,
+              // Return the deducted amount to the advance balance...
+              advance: Number(emp.advance || 0) + (settled > 0 ? settled : 0),
+              // ...and clear the monthly advance deduction so net returns to full salary.
+              advanceDeductionValue: 0,
+            }
+          : emp));
+      }
+      // مكافأة / خصم are derived dynamically from requests, so removing the
+      // request below is enough to reverse their effect.
+    }
+
+    setRequests((prev) => prev.filter((req) => req.id !== requestItem.id));
+
+    // Keep the open statement in sync with the reversed balances.
+    if (requestItem.status === "معتمد") {
+      setStatementEmployee((prev) => {
+        if (!prev || prev.phone !== targetPhone) return prev;
+        if (requestItem.type === "سلفة") {
+          return { ...prev, advance: Math.max(0, Number(prev.advance || 0) - Number(requestItem.amount || 0)) };
+        }
+        if (requestItem.type === "إنزال مرتب") {
+          const settled = Number(requestItem.advanceSettledAmount || 0);
+          return { ...prev, advance: Number(prev.advance || 0) + (settled > 0 ? settled : 0), advanceDeductionValue: 0 };
+        }
+        return prev;
+      });
+    }
+
+    setTransactionToDelete(null);
+  };
+
   const getNotificationContent = (requestItem) => {
     if (!requestItem) return t.noReasonAvailable;
     if (requestItem.type === "إنزال مرتب") {
@@ -4520,6 +4598,29 @@ useEffect(() => {
   };
 
 
+
+  const cancelRoleUpgrade = (request) => {
+    if (!request) return;
+    if (!canManageAll) return; // Owner/HR only.
+
+    // Revert the user back to a regular employee and clear managed scope.
+    setSystemUsers((prev) => prev.map((user) =>
+      user.phone === request.employeePhone
+        ? { ...user, role: "employee", managedDepartment: "", managedBranch: "" }
+        : user
+    ));
+
+    // If the affected user is currently logged in, downgrade their session too.
+    if (authUser?.phone === request.employeePhone) {
+      setAuthUser((prev) => prev ? { ...prev, role: "employee", managedDepartment: "", managedBranch: "" } : prev);
+      setViewMode("upgraded");
+    }
+
+    // Mark the upgrade request as cancelled in the history.
+    setUpgradeRequests((prev) => prev.map((req) =>
+      req.id === request.id ? { ...req, status: "ملغاة" } : req
+    ));
+  };
 
   const applyUserRoleUpgrade = (request) => {
     const employee = employees.find((emp) => emp.phone === request.employeePhone);
@@ -4942,6 +5043,8 @@ useEffect(() => {
       leaveBalance: Number(form.leaveBalance || 0),
       workHours: Number(form.workHours || 0),
       shift: form.shift || "morning",
+      requiredHours: Number(form.requiredHours || 0),
+      requiredMinutes: Number(form.requiredMinutes || 0),
       fromHour: form.fromHour || "",
       toHour: form.toHour || "",
       attendanceLateDeductionMode: form.attendanceLateDeductionMode || "automatic",
@@ -5114,6 +5217,8 @@ useEffect(() => {
       leaveBalance: String(employee.leaveBalance || ""),
       workHours: String(employee.workHours || ""),
       shift: employee.shift || "morning",
+      requiredHours: employee.requiredHours != null ? String(employee.requiredHours) : "",
+      requiredMinutes: employee.requiredMinutes != null ? String(employee.requiredMinutes) : "",
       fromHour: employee.fromHour || "",
       toHour: employee.toHour || "",
       attendanceLateDeductionMode: employee.attendanceLateDeductionMode || "automatic",
@@ -5154,6 +5259,8 @@ useEffect(() => {
               leaveBalance: Number(editForm.leaveBalance || 0),
               workHours: Number(editForm.workHours || 0),
               shift: editForm.shift || "morning",
+              requiredHours: Number(editForm.requiredHours || 0),
+              requiredMinutes: Number(editForm.requiredMinutes || 0),
               fromHour: editForm.fromHour || "",
               toHour: editForm.toHour || "",
               attendanceLateDeductionMode: editForm.attendanceLateDeductionMode || "automatic",
@@ -5569,7 +5676,12 @@ useEffect(() => {
       .filter((req) => req.type === "خصم")
       .reduce((sum, req) => sum + getRequestResolvedAmount(req, salaryAmount), 0);
 
-    const advanceDeduction = getAdvanceDeductionDetails(employee, salaryAmount);
+    const advanceDeductionAuto = getAdvanceDeductionDetails(employee, salaryAmount);
+    // If a manual advance deduction was entered in the wizard, use it (capped by balance).
+    const manualAdvanceEntered = salaryDepositForm.advanceDeductionThisMonth;
+    const advanceDeduction = (manualAdvanceEntered !== undefined && manualAdvanceEntered !== "" && manualAdvanceEntered !== null)
+      ? { ...advanceDeductionAuto, amount: Math.max(0, Math.min(Number(employee.advance || 0), Number(manualAdvanceEntered || 0))) }
+      : advanceDeductionAuto;
     const totalDeductionAmount = payrollDeductionAmount + manualDeductionAmount;
     const netAmount = Math.max(0, salaryAmount - advanceDeduction.amount + rewardAmount - totalDeductionAmount);
     const salaryDepositId = Date.now();
@@ -5631,6 +5743,7 @@ useEffect(() => {
     setEmployees(updatedEmployees);
     setSalaryDepositDialogOpen(false);
     setSalaryDepositForm(emptySalaryDepositForm);
+    setSalaryDepositStep(1);
   };
 
   if (!isAuthenticated) {
@@ -6901,6 +7014,8 @@ useEffect(() => {
                         <Button onClick={() => approveUpgradeRequest(req.id)} style={ui.smallBtn}>{t.approve}</Button>
                         <Button variant="outline" onClick={() => rejectUpgradeRequest(req.id)} style={ui.smallBtn}>{t.reject}</Button>
                       </div>
+                    ) : canManageAll && req.status === "معتمد" ? (
+                      <Button variant="danger" onClick={() => cancelRoleUpgrade(req)} style={ui.smallBtn}>{language === "ar" ? "إلغاء الترقية" : "Cancel upgrade"}</Button>
                     ) : null}
                   >
                     <MobileFieldRow label={t.phone} value={req.employeePhone || "-"} />
@@ -6947,6 +7062,8 @@ useEffect(() => {
                               <Button onClick={() => approveUpgradeRequest(req.id)} style={ui.smallBtn}>{t.approve}</Button>
                               <Button variant="outline" onClick={() => rejectUpgradeRequest(req.id)} style={ui.smallBtn}>{t.reject}</Button>
                             </div>
+                          ) : canManageAll && req.status === "معتمد" ? (
+                            <Button variant="danger" onClick={() => cancelRoleUpgrade(req)} style={ui.smallBtn}>{language === "ar" ? "إلغاء الترقية" : "Cancel upgrade"}</Button>
                           ) : (
                             <span style={{ color: "var(--text-muted)" }}>{req.status}</span>
                           )}
@@ -7321,14 +7438,25 @@ useEffect(() => {
             <Select value={form.shift} onChange={(e) => setForm((p) => ({ ...p, shift: e.target.value }))}>
               <option value="morning">{t.morning}</option>
               <option value="evening">{t.evening}</option>
+              <option value="hourly">{language === "ar" ? "بالساعات (دوام مرن)" : "Hourly (flexible)"}</option>
             </Select>
           </Field>
-          <Field label={t.fromHour}><Input type="time" value={form.fromHour} onChange={(e) => setForm((p) => ({ ...p, fromHour: e.target.value }))} /></Field>
-          <Field label={t.toHour}><Input type="time" value={form.toHour} onChange={(e) => setForm((p) => ({ ...p, toHour: e.target.value }))} /></Field>
+          {form.shift === "hourly" ? (
+            <>
+              <Field label={language === "ar" ? "المدة المطلوبة (ساعات)" : "Required hours"}><Input type="number" min="0" value={form.requiredHours} onChange={(e) => setForm((p) => ({ ...p, requiredHours: e.target.value }))} placeholder="8" /></Field>
+              <Field label={language === "ar" ? "المدة المطلوبة (دقائق)" : "Required minutes"}><Input type="number" min="0" max="59" value={form.requiredMinutes} onChange={(e) => setForm((p) => ({ ...p, requiredMinutes: e.target.value }))} placeholder="0" /></Field>
+            </>
+          ) : (
+            <>
+              <Field label={t.fromHour}><Input type="time" value={form.fromHour} onChange={(e) => setForm((p) => ({ ...p, fromHour: e.target.value }))} /></Field>
+              <Field label={t.toHour}><Input type="time" value={form.toHour} onChange={(e) => setForm((p) => ({ ...p, toHour: e.target.value }))} /></Field>
+            </>
+          )}
           <Field label="وضع خصم التأخير">
             <Select value={form.attendanceLateDeductionMode} onChange={(e) => setForm((p) => ({ ...p, attendanceLateDeductionMode: e.target.value }))}>
               <option value="automatic">تلقائي</option>
               <option value="manual">يدوي</option>
+              <option value="none">لا يوجد خصم</option>
             </Select>
           </Field>
           <Field label="نوع خصم التأخير">
@@ -7344,6 +7472,7 @@ useEffect(() => {
             <Select value={form.attendanceAbsenceDeductionMode} onChange={(e) => setForm((p) => ({ ...p, attendanceAbsenceDeductionMode: e.target.value }))}>
               <option value="automatic">تلقائي</option>
               <option value="manual">يدوي</option>
+              <option value="none">لا يوجد خصم</option>
             </Select>
           </Field>
           <Field label="نوع خصم الغياب">
@@ -7384,14 +7513,25 @@ useEffect(() => {
             <Select value={editForm.shift} onChange={(e) => setEditForm((p) => ({ ...p, shift: e.target.value }))}>
               <option value="morning">{t.morning}</option>
               <option value="evening">{t.evening}</option>
+              <option value="hourly">{language === "ar" ? "بالساعات (دوام مرن)" : "Hourly (flexible)"}</option>
             </Select>
           </Field>
-          <Field label={t.fromHour}><Input type="time" value={editForm.fromHour} onChange={(e) => setEditForm((p) => ({ ...p, fromHour: e.target.value }))} /></Field>
-          <Field label={t.toHour}><Input type="time" value={editForm.toHour} onChange={(e) => setEditForm((p) => ({ ...p, toHour: e.target.value }))} /></Field>
+          {editForm.shift === "hourly" ? (
+            <>
+              <Field label={language === "ar" ? "المدة المطلوبة (ساعات)" : "Required hours"}><Input type="number" min="0" value={editForm.requiredHours} onChange={(e) => setEditForm((p) => ({ ...p, requiredHours: e.target.value }))} placeholder="8" /></Field>
+              <Field label={language === "ar" ? "المدة المطلوبة (دقائق)" : "Required minutes"}><Input type="number" min="0" max="59" value={editForm.requiredMinutes} onChange={(e) => setEditForm((p) => ({ ...p, requiredMinutes: e.target.value }))} placeholder="0" /></Field>
+            </>
+          ) : (
+            <>
+              <Field label={t.fromHour}><Input type="time" value={editForm.fromHour} onChange={(e) => setEditForm((p) => ({ ...p, fromHour: e.target.value }))} /></Field>
+              <Field label={t.toHour}><Input type="time" value={editForm.toHour} onChange={(e) => setEditForm((p) => ({ ...p, toHour: e.target.value }))} /></Field>
+            </>
+          )}
           <Field label="وضع خصم التأخير">
             <Select value={editForm.attendanceLateDeductionMode} onChange={(e) => setEditForm((p) => ({ ...p, attendanceLateDeductionMode: e.target.value }))}>
               <option value="automatic">تلقائي</option>
               <option value="manual">يدوي</option>
+              <option value="none">لا يوجد خصم</option>
             </Select>
           </Field>
           <Field label="نوع خصم التأخير">
@@ -7407,6 +7547,7 @@ useEffect(() => {
             <Select value={editForm.attendanceAbsenceDeductionMode} onChange={(e) => setEditForm((p) => ({ ...p, attendanceAbsenceDeductionMode: e.target.value }))}>
               <option value="automatic">تلقائي</option>
               <option value="manual">يدوي</option>
+              <option value="none">لا يوجد خصم</option>
             </Select>
           </Field>
           <Field label="نوع خصم الغياب">
@@ -7510,7 +7651,7 @@ useEffect(() => {
                   {canManageAll ? t.rewardOrDeduction : t.requestReward}
                 </Button>
                 {canManageAll && (
-                  <Button variant="outline" onClick={() => setSalaryDepositDialogOpen(true)}>{t.salaryDeposit}</Button>
+                  <Button variant="outline" onClick={() => { setSalaryDepositStep(1); setSalaryDepositDialogOpen(true); }}>{t.salaryDeposit}</Button>
                 )}
               </div>
             )}
@@ -7564,7 +7705,14 @@ useEffect(() => {
                       <MobileDataCard
                         key={req.id}
                         title={req.type}
-                        action={<Button variant="outline" style={ui.smallBtn} onClick={() => openNotificationDialog(req)}>{t.notification}</Button>}
+                        action={
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <Button variant="outline" style={ui.smallBtn} onClick={() => openNotificationDialog(req)}>{t.notification}</Button>
+                            {canManageAll && (
+                              <Button variant="danger" style={ui.smallBtn} onClick={() => deleteStatementTransaction(req)} title={language === "ar" ? "حذف الحركة" : "Delete transaction"}><Trash2 size={14} /></Button>
+                            )}
+                          </div>
+                        }
                       >
                         <MobileFieldRow label={t.amount} value={currency(req.resolvedAmount || req.amount)} />
                         <MobileFieldRow label={t.status} value={getFinancialSettlementStatusLabel(req)} />
@@ -7600,9 +7748,16 @@ useEffect(() => {
                             <td style={ui.td}>{req.decidedBy || "-"}</td>
                             <td style={ui.td}>{req.createdAt ? new Date(req.createdAt).toLocaleDateString(language === "ar" ? "ar-EG" : "en-US") : "سجل سابق"}</td>
                             <td style={ui.td}>
-                              <Button variant="outline" style={ui.smallBtn} onClick={() => openNotificationDialog(req)}>
-                                {t.notification}
-                              </Button>
+                              <div style={{ display: "flex", gap: 6, justifyContent: "flex-start" }}>
+                                <Button variant="outline" style={ui.smallBtn} onClick={() => openNotificationDialog(req)}>
+                                  {t.notification}
+                                </Button>
+                                {canManageAll && (
+                                  <Button variant="danger" style={ui.smallBtn} onClick={() => deleteStatementTransaction(req)} title={language === "ar" ? "حذف الحركة" : "Delete transaction"}>
+                                    <Trash2 size={14} />
+                                  </Button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         ))
@@ -7649,6 +7804,22 @@ useEffect(() => {
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
           <Button variant="outline" onClick={() => { setNotificationDialogOpen(false); setSelectedNotification(null); }}>{t.close}</Button>
         </div>
+      </Modal>
+
+      <Modal open={!!transactionToDelete} title={language === "ar" ? "تأكيد حذف الحركة" : "Confirm delete transaction"} onClose={() => setTransactionToDelete(null)} maxWidth={480}>
+        {transactionToDelete ? (
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{ border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 8, padding: 14, color: "#7f1d1d", fontSize: 14, lineHeight: 1.8 }}>
+              {language === "ar"
+                ? `سيتم حذف حركة "${transactionToDelete.type}" بقيمة ${currency(transactionToDelete.resolvedAmount || transactionToDelete.amount || transactionToDelete.advanceSettledAmount || 0)} وعكس أثرها على الرصيد. لا يمكن التراجع.`
+                : `The "${transactionToDelete.type}" transaction will be deleted and its balance effect reversed. This cannot be undone.`}
+            </div>
+            <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
+              <Button variant="outline" onClick={() => setTransactionToDelete(null)}>{language === "ar" ? "إلغاء" : "Cancel"}</Button>
+              <Button variant="danger" onClick={confirmDeleteTransaction}>{language === "ar" ? "تأكيد الحذف" : "Confirm delete"}</Button>
+            </div>
+          </div>
+        ) : null}
       </Modal>
 
       <Modal
@@ -8291,27 +8462,110 @@ useEffect(() => {
       </Modal>
 
       <Modal open={salaryDepositDialogOpen} title={t.salaryDeposit} onClose={() => setSalaryDepositDialogOpen(false)} maxWidth={560}>
-        <Field label={t.month}>
-          <Select value={salaryDepositForm.month} onChange={(e) => setSalaryDepositForm((p) => ({ ...p, month: e.target.value }))}>
-            <option value="">{t.selectMonth}</option>
-            <option value="1">يناير</option>
-            <option value="2">فبراير</option>
-            <option value="3">مارس</option>
-            <option value="4">أبريل</option>
-            <option value="5">مايو</option>
-            <option value="6">يونيو</option>
-            <option value="7">يوليو</option>
-            <option value="8">أغسطس</option>
-            <option value="9">سبتمبر</option>
-            <option value="10">أكتوبر</option>
-            <option value="11">نوفمبر</option>
-            <option value="12">ديسمبر</option>
-          </Select>
-        </Field>
-        <Field label={t.salaryAmount}><Input type="number" value={salaryDepositForm.salaryAmount} onChange={(e) => setSalaryDepositForm((p) => ({ ...p, salaryAmount: e.target.value }))} /></Field>
-        <Field label={t.deductionAmount}><Input type="number" value={salaryDepositForm.deductionAmount} onChange={(e) => setSalaryDepositForm((p) => ({ ...p, deductionAmount: e.target.value }))} /></Field>
-        <Field label={t.deductionReason}><Textarea value={salaryDepositForm.deductionReason} onChange={(e) => setSalaryDepositForm((p) => ({ ...p, deductionReason: e.target.value }))} /></Field>
-        <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}><Button onClick={submitSalaryDeposit}>{t.salaryDeposit}</Button></div>
+        {(() => {
+          const depositEmp = getFinancialRowEmployee() || getCurrentEmployee();
+          const isManualAdvance = depositEmp && (depositEmp.advanceDeductionMode === "manual") && Number(depositEmp.advance || 0) > 0;
+          const steps = [1, ...(isManualAdvance ? [2] : []), 3];
+          const currentIndex = steps.indexOf(salaryDepositStep) === -1 ? 0 : steps.indexOf(salaryDepositStep);
+          const isLast = currentIndex === steps.length - 1;
+          const goNext = () => setSalaryDepositStep(steps[Math.min(currentIndex + 1, steps.length - 1)]);
+          const goPrev = () => setSalaryDepositStep(steps[Math.max(currentIndex - 1, 0)]);
+          const stepLabel = `${language === "ar" ? "خطوة" : "Step"} ${currentIndex + 1} / ${steps.length}`;
+
+          return (
+            <div>
+              <div style={{ fontSize: 13, color: "var(--text-soft)", marginBottom: 14 }}>{stepLabel}</div>
+
+              {salaryDepositStep === 1 && (
+                <>
+                  <Field label={t.month}>
+                    <Select value={salaryDepositForm.month} onChange={(e) => setSalaryDepositForm((p) => ({ ...p, month: e.target.value }))}>
+                      <option value="">{t.selectMonth}</option>
+                      <option value="1">يناير</option>
+                      <option value="2">فبراير</option>
+                      <option value="3">مارس</option>
+                      <option value="4">أبريل</option>
+                      <option value="5">مايو</option>
+                      <option value="6">يونيو</option>
+                      <option value="7">يوليو</option>
+                      <option value="8">أغسطس</option>
+                      <option value="9">سبتمبر</option>
+                      <option value="10">أكتوبر</option>
+                      <option value="11">نوفمبر</option>
+                      <option value="12">ديسمبر</option>
+                    </Select>
+                  </Field>
+                  <Field label={t.salaryAmount}><Input type="number" value={salaryDepositForm.salaryAmount} onChange={(e) => setSalaryDepositForm((p) => ({ ...p, salaryAmount: e.target.value }))} /></Field>
+                </>
+              )}
+
+              {salaryDepositStep === 2 && (
+                <>
+                  <div style={{ fontSize: 14, color: "var(--text-soft)", marginBottom: 10, lineHeight: 1.7 }}>
+                    {language === "ar" ? `الرصيد الحالي للسلف: ${currency(depositEmp?.advance || 0)}. حدّد قيمة خصم السلفة لهذا الشهر.` : `Current advance: ${currency(depositEmp?.advance || 0)}. Set the advance deduction for this month.`}
+                  </div>
+                  <Field label={language === "ar" ? "قيمة خصم السلفة هذا الشهر" : "Advance deduction this month"}>
+                    <Input
+                      type="number"
+                      value={salaryDepositForm.advanceDeductionThisMonth !== undefined && salaryDepositForm.advanceDeductionThisMonth !== null && salaryDepositForm.advanceDeductionThisMonth !== ""
+                        ? salaryDepositForm.advanceDeductionThisMonth
+                        : String(getAdvanceDeductionDetails(depositEmp, Number(salaryDepositForm.salaryAmount || depositEmp?.salary || 0)).amount || 0)}
+                      onChange={(e) => setSalaryDepositForm((p) => ({ ...p, advanceDeductionThisMonth: e.target.value }))}
+                      placeholder="0"
+                    />
+                  </Field>
+                </>
+              )}
+
+              {salaryDepositStep === 3 && (() => {
+                const empDeductions = depositEmp ? requests.filter((req) =>
+                  req.employeePhone === depositEmp.phone &&
+                  req.status === "معتمد" &&
+                  !req.appliedToSalaryDepositId &&
+                  ["مكافأة", "خصم"].includes(req.type)
+                ) : [];
+                return (
+                  <>
+                    <div style={{ fontSize: 14, color: "var(--text-soft)", marginBottom: 12, lineHeight: 1.7 }}>
+                      {language === "ar" ? "الخصومات والمكافآت المعتمدة لهذا المرتب — يمكنك التعديل أو الإلغاء:" : "Approved rewards/deductions for this payroll — edit or remove:"}
+                    </div>
+                    {empDeductions.length ? (
+                      <div style={{ display: "grid", gap: 10, marginBottom: 16 }}>
+                        {empDeductions.map((req) => (
+                          <div key={req.id} style={{ border: "1px solid var(--border)", borderRadius: 8, padding: 12, background: "var(--surface)" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 8 }}>
+                              <span style={{ fontWeight: 700, color: req.type === "خصم" ? "#b91c1c" : "#15803d" }}>{req.type}</span>
+                              <Button variant="danger" style={ui.smallBtn} onClick={() => setRequests((prev) => prev.filter((r) => r.id !== req.id))} title={language === "ar" ? "إلغاء نهائي" : "Remove"}><Trash2 size={14} /></Button>
+                            </div>
+                            <Field label={t.amount}>
+                              <Input type="number" value={req.amount} onChange={(e) => setRequests((prev) => prev.map((r) => r.id === req.id ? { ...r, amount: Number(e.target.value || 0) } : r))} />
+                            </Field>
+                            {req.reason ? <div style={{ fontSize: 12, color: "var(--text-soft)", marginTop: 4 }}>{language === "ar" ? "السبب" : "Reason"}: {req.reason}</div> : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ fontSize: 13, color: "var(--text-soft)", marginBottom: 16 }}>{language === "ar" ? "لا توجد خصومات أو مكافآت معتمدة." : "No approved rewards or deductions."}</div>
+                    )}
+                    <Field label={language === "ar" ? "خصم يدوي إضافي (اختياري)" : "Extra manual deduction (optional)"}><Input type="number" value={salaryDepositForm.deductionAmount} onChange={(e) => setSalaryDepositForm((p) => ({ ...p, deductionAmount: e.target.value }))} /></Field>
+                    <Field label={t.deductionReason}><Textarea value={salaryDepositForm.deductionReason} onChange={(e) => setSalaryDepositForm((p) => ({ ...p, deductionReason: e.target.value }))} /></Field>
+                  </>
+                );
+              })()}
+
+              <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}), marginTop: 18 }}>
+                {currentIndex > 0 && (
+                  <Button variant="outline" onClick={goPrev}>{language === "ar" ? "السابق" : "Back"}</Button>
+                )}
+                {!isLast ? (
+                  <Button onClick={goNext} disabled={salaryDepositStep === 1 && !salaryDepositForm.salaryAmount}>{language === "ar" ? "التالي" : "Next"}</Button>
+                ) : (
+                  <Button onClick={submitSalaryDeposit} disabled={!salaryDepositForm.salaryAmount}>{t.salaryDeposit}</Button>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </Modal>
 
       <Modal open={rewardDialogOpen} title={canManageAll ? t.rewardOrDeduction : t.requestReward} onClose={() => setRewardDialogOpen(false)} maxWidth={520}>
@@ -8996,18 +9250,18 @@ const ui = {
     right: 0,
     width: "min(360px, 92vw)",
     height: "100vh",
-    background: "linear-gradient(180deg, rgba(255,247,237,0.72) 0%, rgba(255,237,213,0.68) 55%, rgba(255,248,240,0.76) 100%)",
+    background: "var(--surface)",
     backdropFilter: "blur(22px)",
-    color: "#7c2d12",
-    borderLeft: "1px solid rgba(251,146,60,0.24)",
-    boxShadow: "-24px 0 60px rgba(251,146,60,0.14)",
+    color: "var(--text)",
+    borderLeft: "1px solid var(--border)",
+    boxShadow: "-24px 0 60px rgba(0,0,0,0.18)",
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
   },
   sidebarTop: {
     padding: "18px 18px 16px",
-    borderBottom: "1px solid rgba(251,146,60,0.18)",
+    borderBottom: "1px solid var(--border)",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
@@ -9018,22 +9272,22 @@ const ui = {
   sidebarBrand: {
     fontSize: 13,
     fontWeight: 700,
-    color: "#9a3412",
+    color: "var(--text-soft)",
     marginBottom: 6,
   },
   sidebarSubbrand: {
     fontSize: 24,
     fontWeight: 900,
-    color: "#7c2d12",
+    color: "var(--accent)",
     lineHeight: 1.2,
   },
   sidebarCloseButton: {
     width: 40,
     height: 40,
     borderRadius: 7,
-    border: "1px solid rgba(251,146,60,0.25)",
-    background: "rgba(255,255,255,0.42)",
-    color: "#7c2d12",
+    border: "1px solid var(--border)",
+    background: "var(--surface-soft)",
+    color: "var(--text)",
     cursor: "pointer",
     display: "inline-flex",
     alignItems: "center",
@@ -9055,7 +9309,7 @@ const ui = {
   sidebarSectionLabel: {
     fontSize: 12,
     fontWeight: 800,
-    color: "#9a3412",
+    color: "var(--text-soft)",
     letterSpacing: "0.02em",
     textTransform: "uppercase",
     paddingInline: 6,
@@ -9067,7 +9321,7 @@ const ui = {
     borderRadius: 5,
     border: "1px solid transparent",
     background: "transparent",
-    color: "#7c2d12",
+    color: "var(--text)",
     display: "flex",
     alignItems: "center",
     gap: 12,
