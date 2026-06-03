@@ -4644,6 +4644,11 @@ useEffect(() => {
     const targetManagedDepartment = request.requestedRole === "department_manager"
       ? (request.managerDepartment || employee?.managerDepartment || "")
       : "all";
+    // HR and owner have system-wide scope; branch manager is scoped to a branch.
+    const isWideScope = request.requestedRole === "hr" || request.requestedRole === "owner";
+    const resolvedManagedBranch = request.requestedRole === "branch_manager"
+      ? targetBranch
+      : (isWideScope ? "all" : targetBranch);
 
     setSystemUsers((prev) => {
       const exists = prev.some((user) => user.phone === request.employeePhone);
@@ -4655,7 +4660,7 @@ useEffect(() => {
                 name: request.employeeName || user.name,
                 role: request.requestedRole,
                 managedDepartment: targetManagedDepartment,
-                managedBranch: request.requestedRole === "branch_manager" ? targetBranch : (user.managedBranch || targetBranch),
+                managedBranch: resolvedManagedBranch,
               }
             : user
         );
@@ -4668,7 +4673,7 @@ useEffect(() => {
           role: request.requestedRole,
           name: request.employeeName,
           managedDepartment: targetManagedDepartment,
-          managedBranch: request.requestedRole === "branch_manager" ? targetBranch : targetBranch,
+          managedBranch: resolvedManagedBranch,
           mustChangePassword: true,
           passwordChangedOnce: false,
         },
@@ -4683,7 +4688,7 @@ useEffect(() => {
               name: request.employeeName || prev.name,
               role: request.requestedRole,
               managedDepartment: targetManagedDepartment,
-              managedBranch: request.requestedRole === "branch_manager" ? targetBranch : (prev.managedBranch || targetBranch),
+              managedBranch: resolvedManagedBranch,
             }
           : prev
       );
@@ -6959,6 +6964,8 @@ useEffect(() => {
                   <Select value={upgradeRequestForm.requestedRole} onChange={(e) => setUpgradeRequestForm((p) => ({ ...p, requestedRole: e.target.value, branch: "المركزية", managerDepartment: "", createNewDepartment: false, newDepartmentName: "" }))}>
                     <option value="branch_manager">{language === "ar" ? "مدير فرع" : "Branch Manager"}</option>
                     <option value="department_manager">{language === "ar" ? "مدير إدارة" : "Department Manager"}</option>
+                    <option value="hr">{language === "ar" ? "موظف HR" : "HR"}</option>
+                    <option value="owner">{language === "ar" ? "مالك" : "Owner"}</option>
                   </Select>
                 </Field>
 
