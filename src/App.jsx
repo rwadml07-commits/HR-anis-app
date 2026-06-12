@@ -1307,13 +1307,13 @@ function Badge({ children }) {
   return <span style={ui.badge}>{children}</span>;
 }
 
-function Modal({ open, title, children, onClose, maxWidth = 900 }) {
+function Modal({ open, title, children, onClose, maxWidth = 760 }) {
   if (!open) return null;
   return (
     <div style={ui.modalOverlay} onClick={onClose}>
       <div style={{ ...ui.modalBox, maxWidth }} onClick={(e) => e.stopPropagation()}>
         <div style={ui.modalHeader}>
-          <h3 style={{ margin: 0, fontSize: 24 }}>{title}</h3>
+          <h3 style={{ margin: 0, fontSize: 21 }}>{title}</h3>
           <button onClick={onClose} style={ui.iconButton}><X size={18} /></button>
         </div>
         <div style={ui.modalBody}>{children}</div>
@@ -9394,7 +9394,7 @@ const ui = {
   },
   modalBox: {
     width: "100%",
-    maxHeight: "92vh",
+    maxHeight: "88vh",
     overflow: "auto",
     background: "var(--surface-soft)",
     borderRadius: 7,
@@ -9402,7 +9402,7 @@ const ui = {
     boxShadow: "0 30px 80px rgba(0,0,0,0.22)",
   },
   modalHeader: {
-    padding: 18,
+    padding: 14,
     borderBottom: "1px solid var(--border)",
     display: "flex",
     alignItems: "center",
@@ -9410,7 +9410,7 @@ const ui = {
     background: "rgba(255,255,255,0.02)",
   },
   modalBody: {
-    padding: 20,
+    padding: 16,
   },
   iconButton: {
     width: 38,
