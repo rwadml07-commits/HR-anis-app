@@ -51,6 +51,9 @@ import {
   Play,
   Pause,
   Fingerprint,
+  Eye,
+  EyeOff,
+  Upload,
 } from "lucide-react";
 
 // === Artifact-preview compatibility shim ===
@@ -326,9 +329,18 @@ function mergeSystemUsersWithHiddenAccounts(list) {
     return true;
   });
   const byPhone = new Map(filtered.map((user) => [String(user?.phone || '').trim(), user]));
-  // Always ensure the default owner account exists with the correct phone/password.
+  // Always ensure the default owner account exists, but preserve any saved
+  // changes (especially a changed password) from the stored account.
   if (defaultOwner && ownerPhone) {
-    byPhone.set(ownerPhone, { ...defaultOwner, ...(byPhone.get(ownerPhone) || {}), phone: ownerPhone, role: "owner" });
+    const savedOwner = byPhone.get(ownerPhone) || {};
+    byPhone.set(ownerPhone, {
+      ...defaultOwner,
+      ...savedOwner,
+      phone: ownerPhone,
+      role: "owner",
+      // Keep the saved password if the owner changed it; otherwise default.
+      password: savedOwner.password || defaultOwner.password,
+    });
   }
   initialSystemUsers.forEach((defaultUser) => {
     const key = String(defaultUser?.phone || '').trim();
@@ -922,7 +934,11 @@ const isArray = (value) => Array.isArray(value);
 const isPlainObject = (value) => !!value && typeof value === "object" && !Array.isArray(value);
 
 function currency(value) {
-  return `${Number(value || 0).toLocaleString()} د.ل`;
+  return `${Number(value || 0).toLocaleString("en-US")} د.ل`;
+}
+
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString("en-US");
 }
 
 
@@ -1182,6 +1198,40 @@ function Input(props) {
         ...props.style,
       }}
     />
+  );
+}
+
+function PasswordInput(props) {
+  const [show, setShow] = React.useState(false);
+  const { style, ...rest } = props;
+  return (
+    <div style={{ position: "relative", width: "100%" }}>
+      <Input
+        {...rest}
+        type={show ? "text" : "password"}
+        style={{ ...style, paddingInlineStart: 44 }}
+      />
+      <button
+        type="button"
+        onClick={() => setShow((s) => !s)}
+        aria-label={show ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
+        style={{
+          position: "absolute",
+          insetInlineStart: 8,
+          top: "50%",
+          transform: "translateY(-50%)",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          color: "var(--text-soft)",
+          display: "flex",
+          alignItems: "center",
+          padding: 4,
+        }}
+      >
+        {show ? <EyeOff size={18} /> : <Eye size={18} />}
+      </button>
+    </div>
   );
 }
 
@@ -3013,7 +3063,7 @@ useEffect(() => {
       ? ["الاسم", "الإدارة", "المرتب الأساسي", "رقم الهاتف", "الفرع", "الصافي"]
       : ["Name", "Department", "Basic Salary", "Phone", "Branch", "Net"];
     const rows = filteredEmployees.map((emp) => {
-      const net = Number(emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.salary || emp.basicSalary || 0).amount;
+      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.salary || emp.basicSalary || 0).amount);
       return [
         emp.name || "-",
         emp.department || "-",
@@ -4861,6 +4911,38 @@ useEffect(() => {
     setResetSystemMessage(language === "ar" ? "تم تنزيل النسخة الاحتياطية (JSON و Excel)." : "Backup downloaded (JSON and Excel).");
   };
 
+  const restoreSystemBackup = (file) => {
+    if (!file) return;
+    if (authUser?.role !== "owner") {
+      setResetSystemMessage(language === "ar" ? "استرجاع النسخة متاح للمالك فقط." : "Restore is available to the owner only.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(String(e.target?.result || "{}"));
+        if (!data || typeof data !== "object") throw new Error("bad file");
+        // Restore each collection if present in the backup.
+        if (Array.isArray(data.employees)) setEmployees(normalizeEmployeesCollection(data.employees.map((x) => ({ ...x }))));
+        if (Array.isArray(data.requests)) setRequests(data.requests);
+        if (Array.isArray(data.systemUsers)) setSystemUsers(mergeSystemUsersWithHiddenAccounts(data.systemUsers));
+        if (Array.isArray(data.pendingAccounts)) setPendingAccounts(data.pendingAccounts);
+        if (Array.isArray(data.upgradeRequests)) setUpgradeRequests(data.upgradeRequests);
+        if (Array.isArray(data.complaints)) setComplaints(data.complaints);
+        if (Array.isArray(data.chats)) setChats(data.chats);
+        if (Array.isArray(data.chatCalls)) setChatCalls(data.chatCalls);
+        if (Array.isArray(data.feedbackEntries)) setFeedbackEntries(data.feedbackEntries);
+        setResetSystemMessage(language === "ar" ? "تم استرجاع البيانات من النسخة الاحتياطية بنجاح." : "Data restored from backup successfully.");
+      } catch (err) {
+        setResetSystemMessage(language === "ar" ? "تعذّر قراءة الملف. تأكد أنه ملف نسخة احتياطية JSON صحيح." : "Could not read the file. Make sure it is a valid JSON backup.");
+      }
+    };
+    reader.onerror = () => {
+      setResetSystemMessage(language === "ar" ? "حدث خطأ أثناء قراءة الملف." : "Error reading the file.");
+    };
+    reader.readAsText(file);
+  };
+
   const handleResetSystem = () => {
     // Owner-only, irreversible. Restores default seed data and clears all
     // operational data (requests, messages, reports, complaints, etc.).
@@ -5785,7 +5867,7 @@ useEffect(() => {
                 <Input value={registerForm.phone} onChange={(e) => setRegisterForm((p) => ({ ...p, phone: e.target.value }))} />
               </Field>
               <Field label={t.password}>
-                <Input type="password" value={registerForm.password} onChange={(e) => setRegisterForm((p) => ({ ...p, password: e.target.value }))} />
+                <PasswordInput value={registerForm.password} onChange={(e) => setRegisterForm((p) => ({ ...p, password: e.target.value }))} />
               </Field>
               <Field label={t.department}>
                 <Input value={registerForm.department} onChange={(e) => setRegisterForm((p) => ({ ...p, department: e.target.value }))} />
@@ -5833,7 +5915,7 @@ useEffect(() => {
 
           <div>
             <Input placeholder={t.phone} value={loginData.phone} onChange={(e) => setLoginData((p) => ({ ...p, phone: e.target.value }))} style={{ borderRadius: 999, height: 50, padding: "0 18px", marginBottom: 18 }} />
-            <Input type="password" placeholder={t.password} value={loginData.password} onChange={(e) => setLoginData((p) => ({ ...p, password: e.target.value }))} style={{ borderRadius: 999, height: 50, padding: "0 18px", marginBottom: 8 }} />
+            <PasswordInput placeholder={t.password} value={loginData.password} onChange={(e) => setLoginData((p) => ({ ...p, password: e.target.value }))} style={{ borderRadius: 999, height: 50, padding: "0 18px", marginBottom: 8 }} />
             {loginError ? <p style={ui.errorText}>{loginError}</p> : null}
             <Button onClick={handleLogin} width="100%" style={{ height: 50, marginTop: 8 }}>{t.login}</Button>
             <Button variant="outline" onClick={() => setShowRegister(true)} width="100%" style={{ marginTop: 16, height: 50 }}>
@@ -6034,12 +6116,12 @@ useEffect(() => {
       <div style={{ ...ui.statsGrid, ...(isMobileView ? ui.statsGridMobile : {}) }}>
         {!isEmployee && (
           <>
-            <SummaryCard title={t.employeeCount} value={totals.employeeCount} icon={Users} isMobile={isMobileView} />
-            <SummaryCard title={t.branchCount} value={totals.branchCount} icon={MapPin} isMobile={isMobileView} />
+            <SummaryCard title={t.employeeCount} value={formatNumber(totals.employeeCount)} icon={Users} isMobile={isMobileView} />
+            <SummaryCard title={t.branchCount} value={formatNumber(totals.branchCount)} icon={MapPin} isMobile={isMobileView} />
           </>
         )}
         <SummaryCard title={t.payrollTotal} value={currency(totals.totalPayroll)} icon={Wallet} isMobile={isMobileView} />
-        <SummaryCard title={t.leaveTotal} value={totals.totalLeaveBalance} icon={CalendarDays} isMobile={isMobileView} />
+        <SummaryCard title={t.leaveTotal} value={formatNumber(totals.totalLeaveBalance)} icon={CalendarDays} isMobile={isMobileView} />
         <SummaryCard title={t.advancesTotal} value={currency(totals.totalAdvances)} subtitle={language === "ar" ? `المخصوم من الرواتب: ${currency(totals.totalAdvanceDeducted)} • المتبقي: ${currency(totals.totalAdvances)}` : `Deducted: ${currency(totals.totalAdvanceDeducted)} • Remaining: ${currency(totals.totalAdvances)}`} icon={BadgeInfo} isMobile={isMobileView} />
       </div>
 
@@ -7309,7 +7391,7 @@ useEffect(() => {
             {isMobileView ? (
               <div style={ui.mobileCardsStack}>
                 {filteredEmployees.map((emp) => {
-                  const net = Number(emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.salary || emp.basicSalary || 0).amount;
+                  const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.salary || emp.basicSalary || 0).amount);
                   return (
                     <MobileDataCard
                       key={emp.id}
@@ -7340,7 +7422,7 @@ useEffect(() => {
                   </thead>
                   <tbody>
                     {filteredEmployees.map((emp) => {
-                      const net = Number(emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.salary || emp.basicSalary || 0).amount;
+                      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.salary || emp.basicSalary || 0).amount);
                       return (
                         <tr
                           key={emp.id}
@@ -7443,7 +7525,7 @@ useEffect(() => {
           <Field label={language === "ar" ? "رقم البصمة (Person ID)" : "Fingerprint ID (Person ID)"}><Input value={form.fingerprintId} onChange={(e) => setForm((p) => ({ ...p, fingerprintId: e.target.value }))} placeholder={language === "ar" ? "مثال: 0001" : "e.g. 0001"} /></Field>
           <Field label={t.department}><Input value={form.department} onChange={(e) => setForm((p) => ({ ...p, department: e.target.value }))} /></Field>
           <Field label={t.managerDepartment}><Input value={form.managerDepartment} onChange={(e) => setForm((p) => ({ ...p, managerDepartment: e.target.value }))} /></Field>
-          <Field label={t.password}><Input type="password" value={form.password} onChange={(e) => setForm((p) => ({ ...p, password: e.target.value }))} /></Field>
+          <Field label={t.password}><PasswordInput value={form.password} onChange={(e) => setForm((p) => ({ ...p, password: e.target.value }))} /></Field>
           <Field label={t.phone}><Input value={form.phone} onChange={(e) => setForm((p) => ({ ...p, phone: e.target.value }))} /></Field>
           <Field label={t.location}>
             <Select value={form.location} onChange={(e) => setForm((p) => ({ ...p, location: e.target.value }))}>
@@ -7518,7 +7600,7 @@ useEffect(() => {
           <Field label={language === "ar" ? "رقم البصمة (Person ID)" : "Fingerprint ID (Person ID)"}><Input value={editForm.fingerprintId} onChange={(e) => setEditForm((p) => ({ ...p, fingerprintId: e.target.value }))} placeholder={language === "ar" ? "مثال: 0001" : "e.g. 0001"} /></Field>
           <Field label={t.department}><Input value={editForm.department} onChange={(e) => setEditForm((p) => ({ ...p, department: e.target.value }))} /></Field>
           <Field label={t.managerDepartment}><Input value={editForm.managerDepartment} onChange={(e) => setEditForm((p) => ({ ...p, managerDepartment: e.target.value }))} /></Field>
-          <Field label={t.password}><Input type="password" value={editForm.password} onChange={(e) => setEditForm((p) => ({ ...p, password: e.target.value }))} /></Field>
+          <Field label={t.password}><PasswordInput value={editForm.password} onChange={(e) => setEditForm((p) => ({ ...p, password: e.target.value }))} /></Field>
           <Field label={t.phone}><Input value={editForm.phone} onChange={(e) => setEditForm((p) => ({ ...p, phone: e.target.value }))} /></Field>
           <Field label={t.location}>
             <Select value={editForm.location} onChange={(e) => setEditForm((p) => ({ ...p, location: e.target.value }))}>
@@ -7592,7 +7674,7 @@ useEffect(() => {
           <Field label={t.name}><Input value={completeForm.name} onChange={(e) => setCompleteForm((p) => ({ ...p, name: e.target.value }))} /></Field>
           <Field label={t.department}><Input value={completeForm.department} onChange={(e) => setCompleteForm((p) => ({ ...p, department: e.target.value }))} /></Field>
           <Field label={t.managerDepartment}><Input value={completeForm.managerDepartment} onChange={(e) => setCompleteForm((p) => ({ ...p, managerDepartment: e.target.value }))} /></Field>
-          <Field label={t.password}><Input type="password" value={completeForm.password} onChange={(e) => setCompleteForm((p) => ({ ...p, password: e.target.value }))} /></Field>
+          <Field label={t.password}><PasswordInput value={completeForm.password} onChange={(e) => setCompleteForm((p) => ({ ...p, password: e.target.value }))} /></Field>
           <Field label={t.phone}><Input value={completeForm.phone} onChange={(e) => setCompleteForm((p) => ({ ...p, phone: e.target.value }))} /></Field>
           <Field label={t.location}>
             <Select value={completeForm.location} onChange={(e) => setCompleteForm((p) => ({ ...p, location: e.target.value }))}>
@@ -8345,7 +8427,12 @@ useEffect(() => {
             <Button variant="outline" onClick={exportSystemBackup}>
               <Download size={16} /> {language === "ar" ? "تصدير نسخة احتياطية أولاً" : "Export backup first"}
             </Button>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
+            <Button variant="outline" onClick={() => document.getElementById("restoreBackupInputReset")?.click()}>
+              <Upload size={16} /> {language === "ar" ? "استرجاع من نسخة احتياطية" : "Restore from backup"}
+            </Button>
+            <input id="restoreBackupInputReset" type="file" accept="application/json,.json" style={{ display: "none" }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) restoreSystemBackup(f); e.target.value = ""; }} />
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
               {language === "ar" ? "(يُنزّل ملف JSON و Excel بكل البيانات)" : "(downloads JSON + Excel of all data)"}
             </span>
           </div>
@@ -8375,7 +8462,12 @@ useEffect(() => {
             <Button variant="outline" onClick={exportSystemBackup}>
               <Download size={16} /> {language === "ar" ? "تصدير نسخة احتياطية أولاً" : "Export backup first"}
             </Button>
-            <span style={{ fontSize: 12, color: "#6b7280" }}>
+            <Button variant="outline" onClick={() => document.getElementById("restoreBackupInputEmpty")?.click()}>
+              <Upload size={16} /> {language === "ar" ? "استرجاع من نسخة احتياطية" : "Restore from backup"}
+            </Button>
+            <input id="restoreBackupInputEmpty" type="file" accept="application/json,.json" style={{ display: "none" }}
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) restoreSystemBackup(f); e.target.value = ""; }} />
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
               {language === "ar" ? "(يُنزّل ملف JSON و Excel بكل البيانات)" : "(downloads JSON + Excel of all data)"}
             </span>
           </div>
@@ -8394,14 +8486,14 @@ useEffect(() => {
       <Modal open={passwordDialogOpen} title={t.changePassword} onClose={() => setPasswordDialogOpen(false)} maxWidth={520}>
         {!authUser?.mustChangePassword && (
           <Field label={t.currentPassword}>
-            <Input type="password" value={passwordForm.currentPassword} onChange={(e) => setPasswordForm((p) => ({ ...p, currentPassword: e.target.value }))} />
+            <PasswordInput value={passwordForm.currentPassword} onChange={(e) => setPasswordForm((p) => ({ ...p, currentPassword: e.target.value }))} />
           </Field>
         )}
         <Field label={t.newPassword}>
-          <Input type="password" value={passwordForm.newPassword} onChange={(e) => setPasswordForm((p) => ({ ...p, newPassword: e.target.value }))} />
+          <PasswordInput value={passwordForm.newPassword} onChange={(e) => setPasswordForm((p) => ({ ...p, newPassword: e.target.value }))} />
         </Field>
         <Field label={t.confirmPassword}>
-          <Input type="password" value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm((p) => ({ ...p, confirmPassword: e.target.value }))} />
+          <PasswordInput value={passwordForm.confirmPassword} onChange={(e) => setPasswordForm((p) => ({ ...p, confirmPassword: e.target.value }))} />
         </Field>
         {passwordMessage ? <p style={ui.errorText}>{passwordMessage}</p> : null}
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}><Button onClick={changePassword}>{t.changePassword}</Button></div>
@@ -10420,9 +10512,9 @@ const ui = {
   },
   employeeCvCard: {
     overflow: "hidden",
-    background: "#fffaf5",
-    border: "1px solid #f5d7b4",
-    color: "#0f172a",
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    color: "var(--text)",
   },
   employeeCvLayout: {
     display: "grid",
@@ -10509,7 +10601,7 @@ const ui = {
     display: "grid",
     gap: 18,
     alignContent: "start",
-    color: "#0f172a",
+    color: "var(--text)",
   },
   employeeCvName: {
     fontSize: 42,
@@ -10518,7 +10610,7 @@ const ui = {
     lineHeight: 1.15,
   },
   employeeCvSubtitle: {
-    color: "#475569",
+    color: "var(--text-soft)",
     fontSize: 22,
     fontWeight: 700,
     marginTop: -2,
@@ -10545,7 +10637,7 @@ const ui = {
     gap: 18,
     alignItems: "start",
     padding: "12px 0",
-    borderBottom: "1px solid #e8d6c3",
+    borderBottom: "1px solid var(--border)",
   },
   employeeCvKey: {
     color: "#ea580c",
@@ -10553,32 +10645,32 @@ const ui = {
     fontWeight: 800,
   },
   employeeCvVal: {
-    color: "#0f172a",
+    color: "var(--text)",
     fontSize: 18,
     fontWeight: 700,
     lineHeight: 1.9,
   },
   employeeCvDescription: {
-    border: "1px solid #ecd8c2",
+    border: "1px solid var(--border)",
     borderRadius: 6,
-    background: "#ffffff",
+    background: "var(--surface-soft)",
     padding: 22,
     minHeight: 150,
     boxSizing: "border-box",
-    color: "#0f172a",
+    color: "var(--text)",
     fontSize: 18,
     lineHeight: 2,
   },
   employeeCvSide: {
-    background: "linear-gradient(180deg, #fff7ed 0%, #fff1df 100%)",
+    background: "var(--surface-soft)",
     borderRadius: 8,
     padding: 22,
     display: "grid",
     gap: 22,
     alignContent: "start",
-    border: "1px solid #fed7aa",
+    border: "1px solid var(--border)",
     minHeight: 100,
-    color: "#0f172a",
+    color: "var(--text)",
   },
   employeeCvArt: {
     position: "relative",
@@ -10666,7 +10758,7 @@ const ui = {
     boxShadow: "0 10px 20px rgba(245,158,11,0.18)",
   },
   employeeCvContactValue: {
-    color: "#0f172a",
+    color: "var(--text)",
     fontSize: 17,
     fontWeight: 800,
     lineHeight: 1.8,
