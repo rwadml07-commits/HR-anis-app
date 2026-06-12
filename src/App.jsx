@@ -5106,6 +5106,12 @@ useEffect(() => {
     setClearDataDialogOpen(true);
   };
 
+  const openPasswordDialog = () => {
+    setPasswordMessage("");
+    setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
+    setPasswordDialogOpen(true);
+  };
+
   const changePassword = () => {
     if (!authUser) return;
     if (!passwordForm.newPassword || !passwordForm.confirmPassword) {
