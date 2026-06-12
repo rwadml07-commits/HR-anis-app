@@ -934,11 +934,21 @@ const isArray = (value) => Array.isArray(value);
 const isPlainObject = (value) => !!value && typeof value === "object" && !Array.isArray(value);
 
 function currency(value) {
-  return `${Number(value || 0).toLocaleString("en-US")} د.ل`;
+  return `${toNumber(value).toLocaleString("en-US", { maximumFractionDigits: 2 })} د.ل`;
 }
 
 function formatNumber(value) {
-  return Number(value || 0).toLocaleString("en-US");
+  return toNumber(value).toLocaleString("en-US");
+}
+
+// Safely parse a number even if it was stored as a string with commas,
+// spaces, or Arabic separators. Returns 0 for anything invalid.
+function toNumber(value) {
+  if (typeof value === "number") return isFinite(value) ? value : 0;
+  if (value == null) return 0;
+  const cleaned = String(value).replace(/[^\d.-]/g, "");
+  const n = parseFloat(cleaned);
+  return isFinite(n) ? n : 0;
 }
 
 
@@ -1650,7 +1660,8 @@ export default function HRManagementApp() {
       setCloudStatus("online");
     } catch (error) {
       console.error("Cloud sync save failed:", error);
-      remoteReadyRef.current = false;
+      // Keep remoteReadyRef true: the table is set up, this was likely a
+      // transient network error. Leaving it true lets later edits retry.
       setCloudStatus("error");
     }
   };
@@ -2101,7 +2112,11 @@ useEffect(() => {
 }, [authUser?.role, cloudEnabled]);
 
 useEffect(() => {
-  if (!cloudEnabled || !remoteReadyRef.current || applyingRemoteRef.current || cloudStatus === "error") return undefined;
+  // Note: we intentionally do NOT bail out when cloudStatus === "error".
+  // If a previous save failed (e.g. network dropped), we still want to retry
+  // on the next data change so offline edits get pushed once the connection
+  // is back. Bailing on "error" would permanently stop syncing for the session.
+  if (!cloudEnabled || !remoteReadyRef.current || applyingRemoteRef.current) return undefined;
 
   const snapshot = buildCurrentRemoteSnapshot();
 
@@ -2131,6 +2146,24 @@ useEffect(() => {
   };
 }, [employees, requests, systemUsers, pendingAccounts, upgradeRequests, complaints, chats, chatCalls, feedbackEntries]);
 
+useEffect(() => {
+  if (!cloudEnabled) return undefined;
+  const handleOnline = () => {
+    // Connection returned: push the latest local state to the cloud so any
+    // edits made while offline are saved.
+    if (remoteReadyRef.current && !applyingRemoteRef.current) {
+      forceRemoteSaveSnapshot();
+    }
+  };
+  const handleOffline = () => setCloudStatus("error");
+  window.addEventListener("online", handleOnline);
+  window.addEventListener("offline", handleOffline);
+  return () => {
+    window.removeEventListener("online", handleOnline);
+    window.removeEventListener("offline", handleOffline);
+  };
+}, [cloudEnabled]);
+
   const visibleEmployees = useMemo(() => {
     if (!authUser) return [];
     if (canManageAll) return employees;
@@ -2159,7 +2192,7 @@ useEffect(() => {
   const totals = useMemo(() => ({
     employeeCount: visibleEmployees.length,
     branchCount: new Set(visibleEmployees.map((emp) => emp.location).filter(Boolean)).size,
-    totalPayroll: visibleEmployees.reduce((sum, emp) => sum + Number(emp.salary || 0), 0),
+    totalPayroll: visibleEmployees.reduce((sum, emp) => sum + toNumber(emp.salary), 0),
     totalAdvances: visibleEmployees.reduce((sum, emp) => sum + Number(emp.advance || 0), 0),
     totalAdvanceDeducted: (() => {
       const visiblePhones = new Set(visibleEmployees.map((emp) => String(emp.phone)));
@@ -4913,8 +4946,8 @@ useEffect(() => {
 
   const restoreSystemBackup = (file) => {
     if (!file) return;
-    if (authUser?.role !== "owner") {
-      setResetSystemMessage(language === "ar" ? "استرجاع النسخة متاح للمالك فقط." : "Restore is available to the owner only.");
+    if (!["owner", "hr"].includes(authUser?.role)) {
+      setResetSystemMessage(language === "ar" ? "استرجاع النسخة متاح للمالك أو HR فقط." : "Restore is available to owner or HR only.");
       return;
     }
     const reader = new FileReader();
@@ -6122,7 +6155,7 @@ useEffect(() => {
         )}
         <SummaryCard title={t.payrollTotal} value={currency(totals.totalPayroll)} icon={Wallet} isMobile={isMobileView} />
         <SummaryCard title={t.leaveTotal} value={formatNumber(totals.totalLeaveBalance)} icon={CalendarDays} isMobile={isMobileView} />
-        <SummaryCard title={t.advancesTotal} value={currency(totals.totalAdvances)} subtitle={language === "ar" ? `المخصوم من الرواتب: ${currency(totals.totalAdvanceDeducted)} • المتبقي: ${currency(totals.totalAdvances)}` : `Deducted: ${currency(totals.totalAdvanceDeducted)} • Remaining: ${currency(totals.totalAdvances)}`} icon={BadgeInfo} isMobile={isMobileView} />
+        <SummaryCard title={t.advancesTotal} value={currency(totals.totalAdvances)} icon={BadgeInfo} isMobile={isMobileView} />
       </div>
 
       
@@ -8380,6 +8413,30 @@ useEffect(() => {
               <Button variant={authUser?.searchHidden ? "danger" : "outline"} onClick={toggleMySearchVisibility}>
                 {authUser?.searchHidden ? chatLabels.showMyNumber : chatLabels.hideMyNumber}
               </Button>
+            </div>
+          )}
+
+          {["owner", "hr"].includes(authUser?.role) && (
+            <div style={ui.settingsBox}>
+              <div style={ui.settingsTitle}><Download size={16} /> {language === "ar" ? "النسخة الاحتياطية" : "Backup"}</div>
+              <p style={{ margin: "0 0 10px", fontSize: 13, color: "var(--text-soft)", lineHeight: 1.7 }}>
+                {language === "ar"
+                  ? "تصدير نسخة احتياطية بكل بيانات السستم (JSON و Excel)، أو استرجاع البيانات من ملف نسخة احتياطية. تعمل محليًا بدون إنترنت."
+                  : "Export a full backup of all system data (JSON & Excel), or restore from a backup file. Works locally without internet."}
+              </p>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Button variant="outline" onClick={exportSystemBackup}>
+                  <Download size={16} /> {language === "ar" ? "تصدير نسخة احتياطية" : "Export backup"}
+                </Button>
+                <Button variant="outline" onClick={() => document.getElementById("restoreBackupInputSettings")?.click()}>
+                  <Upload size={16} /> {language === "ar" ? "استرجاع من ملف" : "Restore from file"}
+                </Button>
+                <input id="restoreBackupInputSettings" type="file" accept="application/json,.json" style={{ display: "none" }}
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) restoreSystemBackup(f); e.target.value = ""; }} />
+              </div>
+              {resetSystemMessage ? (
+                <p style={/تم تنزيل|downloaded|استرجاع|restored/.test(resetSystemMessage) ? { margin: "8px 0 0", color: "#15803d", fontSize: 13 } : { margin: "8px 0 0", color: "#b91c1c", fontSize: 13 }}>{resetSystemMessage}</p>
+              ) : null}
             </div>
           )}
 
