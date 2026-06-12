@@ -1225,6 +1225,12 @@ function Input(props) {
         setFocused(false);
         props.onBlur?.(e);
       }}
+      onWheel={(e) => {
+        if (normalizedType === "number") {
+          e.currentTarget.blur();
+        }
+        props.onWheel?.(e);
+      }}
       style={{
         ...ui.input,
         ...(forceLtr ? { direction: "ltr", textAlign: "left", unicodeBidi: "plaintext" } : {}),
@@ -1923,6 +1929,17 @@ export default function HRManagementApp() {
       select option {
         background: ${themeMode === "dark" ? "#282b2e" : "#ffffff"} !important;
         color: ${themeMode === "dark" ? "#eceef0" : "#0f172a"} !important;
+      }
+
+      /* Hide the up/down spinner arrows on number inputs */
+      input[type="number"]::-webkit-outer-spin-button,
+      input[type="number"]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+      }
+      input[type="number"] {
+        -moz-appearance: textfield;
+        appearance: textfield;
       }
 
       textarea,
