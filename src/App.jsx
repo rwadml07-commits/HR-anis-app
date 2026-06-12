@@ -582,6 +582,35 @@ function sanitizeRemoteState(payload) {
   };
 }
 
+function getRequestResolvedAmountFor(req, base) {
+  const amt = Number(req.amount || 0);
+  if (req.valueType === "percentage") return (Number(base || 0) * amt) / 100;
+  return amt;
+}
+
+// Standalone net calculation so it can be used inside useMemo (which runs
+// before component-scoped arrow functions are defined). Net is 0 until a
+// salary deposit is made.
+function computeEmployeeNet(employee, requests) {
+  if (!employee) return 0;
+  const empRequests = (Array.isArray(requests) ? requests : [])
+    .filter((req) => req.employeePhone === employee.phone && ["مكافأة", "خصم", "إنزال مرتب"].includes(req.type))
+    .sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+  const latestSalaryDeposit = empRequests.find((req) => req.type === "إنزال مرتب" && req.status === "معتمد") || null;
+  const basicSalary = Number(employee.basicSalary || employee.salary || 0);
+  const grossSalary = Number(latestSalaryDeposit?.salaryAmount || basicSalary || 0);
+  const approvedRewards = empRequests
+    .filter((req) => req.type === "مكافأة" && req.status === "معتمد" && !req.appliedToSalaryDepositId)
+    .reduce((sum, req) => sum + getRequestResolvedAmountFor(req, grossSalary), 0);
+  const approvedDeductions = empRequests
+    .filter((req) => req.type === "خصم" && req.status === "معتمد" && !req.appliedToSalaryDepositId)
+    .reduce((sum, req) => sum + getRequestResolvedAmountFor(req, grossSalary), 0);
+  const baseNet = latestSalaryDeposit ? Math.max(0, Number(latestSalaryDeposit.amount || 0)) : 0;
+  // Rewards/deductions only count once a salary has been deposited.
+  if (!latestSalaryDeposit) return 0;
+  return Math.max(0, baseNet + approvedRewards - approvedDeductions);
+}
+
 const translations = {
   ar: {
     loginTitle: "تسجيل الدخول",
@@ -2195,7 +2224,7 @@ useEffect(() => {
   const totals = useMemo(() => ({
     employeeCount: visibleEmployees.length,
     branchCount: new Set(visibleEmployees.map((emp) => emp.location).filter(Boolean)).size,
-    totalPayroll: visibleEmployees.reduce((sum, emp) => sum + toNumber(emp.basicSalary || emp.salary), 0),
+    totalPayroll: visibleEmployees.reduce((sum, emp) => sum + computeEmployeeNet(emp, requests), 0),
     totalAdvances: visibleEmployees.reduce((sum, emp) => sum + Number(emp.advance || 0), 0),
     totalAdvanceDeducted: (() => {
       const visiblePhones = new Set(visibleEmployees.map((emp) => String(emp.phone)));
@@ -3099,7 +3128,7 @@ useEffect(() => {
       ? ["الاسم", "الإدارة", "المرتب الأساسي", "رقم الهاتف", "الفرع", "الصافي"]
       : ["Name", "Department", "Basic Salary", "Phone", "Branch", "Net"];
     const rows = filteredEmployees.map((emp) => {
-      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.basicSalary || emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.basicSalary || emp.salary || 0).amount);
+      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? 0;
       return [
         emp.name || "-",
         emp.department || "-",
@@ -4502,8 +4531,13 @@ useEffect(() => {
     const currentAdvanceBalance = Number(employee.advance || 0);
     const advanceDeduction = getAdvanceDeductionDetails(employee, grossSalary);
     const latestNetAmount = latestSalaryDeposit ? Math.max(0, Number(latestSalaryDeposit.amount || 0)) : null;
-    const baseNet = latestNetAmount !== null ? latestNetAmount : Math.max(0, grossSalary - advanceDeduction.amount);
-    const estimatedNet = Math.max(0, baseNet + approvedRewards - approvedDeductions);
+    // If no salary deposit has been made yet, the actual net is 0 (nothing paid
+    // out). Only once a salary is deposited does the net reflect the amount.
+    const baseNet = latestNetAmount !== null ? latestNetAmount : 0;
+    // Rewards/deductions only affect the net once a salary deposit exists.
+    const estimatedNet = latestSalaryDeposit
+      ? Math.max(0, baseNet + approvedRewards - approvedDeductions)
+      : 0;
 
     return {
       basicSalary,
@@ -7501,7 +7535,7 @@ useEffect(() => {
             {isMobileView ? (
               <div style={ui.mobileCardsStack}>
                 {filteredEmployees.map((emp) => {
-                  const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.basicSalary || emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.basicSalary || emp.salary || 0).amount);
+                  const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? 0;
                   return (
                     <MobileDataCard
                       key={emp.id}
@@ -7532,7 +7566,7 @@ useEffect(() => {
                   </thead>
                   <tbody>
                     {filteredEmployees.map((emp) => {
-                      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.basicSalary || emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.basicSalary || emp.salary || 0).amount);
+                      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? 0;
                       return (
                         <tr
                           key={emp.id}
