@@ -2195,7 +2195,7 @@ useEffect(() => {
   const totals = useMemo(() => ({
     employeeCount: visibleEmployees.length,
     branchCount: new Set(visibleEmployees.map((emp) => emp.location).filter(Boolean)).size,
-    totalPayroll: visibleEmployees.reduce((sum, emp) => sum + toNumber(emp.salary), 0),
+    totalPayroll: visibleEmployees.reduce((sum, emp) => sum + toNumber(emp.basicSalary || emp.salary), 0),
     totalAdvances: visibleEmployees.reduce((sum, emp) => sum + Number(emp.advance || 0), 0),
     totalAdvanceDeducted: (() => {
       const visiblePhones = new Set(visibleEmployees.map((emp) => String(emp.phone)));
@@ -3099,7 +3099,7 @@ useEffect(() => {
       ? ["الاسم", "الإدارة", "المرتب الأساسي", "رقم الهاتف", "الفرع", "الصافي"]
       : ["Name", "Department", "Basic Salary", "Phone", "Branch", "Net"];
     const rows = filteredEmployees.map((emp) => {
-      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.salary || emp.basicSalary || 0).amount);
+      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.basicSalary || emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.basicSalary || emp.salary || 0).amount);
       return [
         emp.name || "-",
         emp.department || "-",
@@ -4483,7 +4483,9 @@ useEffect(() => {
 
     const basicSalary = Number(employee.basicSalary || employee.salary || 0);
     const latestSalaryDeposit = employeeRequests.find((req) => req.type === "إنزال مرتب" && req.status === "معتمد") || null;
-    const grossSalary = Number(latestSalaryDeposit?.salaryAmount || employee.salary || employee.basicSalary || 0);
+    // Base on the salary deposit if present, otherwise the basic salary.
+    // (Using basicSalary avoids a stale employee.salary inflating the net.)
+    const grossSalary = Number(latestSalaryDeposit?.salaryAmount || basicSalary || 0);
 
     const approvedAdvances = employeeRequests
       .filter((req) => req.type === "سلفة" && req.status === "معتمد")
@@ -5078,11 +5080,18 @@ useEffect(() => {
     // Build the cleared collections.
     const clearedRequests = [];
     const clearedComplaints = [];
-    const clearedEmployees = employees.map((emp) => ({
-      ...emp,
-      advance: 0,
-      advanceDeductionValue: 0,
-    }));
+    const clearedEmployees = employees.map((emp) => {
+      const base = Number(emp.basicSalary || emp.salary || 0);
+      return {
+        ...emp,
+        // Restore salary to the basic salary so the net returns to base
+        // (any salary bumps from prior salary deposits are undone).
+        salary: base,
+        basicSalary: base,
+        advance: 0,
+        advanceDeductionValue: 0,
+      };
+    });
 
     // Apply locally.
     setRequests(clearedRequests);
@@ -7492,7 +7501,7 @@ useEffect(() => {
             {isMobileView ? (
               <div style={ui.mobileCardsStack}>
                 {filteredEmployees.map((emp) => {
-                  const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.salary || emp.basicSalary || 0).amount);
+                  const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.basicSalary || emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.basicSalary || emp.salary || 0).amount);
                   return (
                     <MobileDataCard
                       key={emp.id}
@@ -7523,7 +7532,7 @@ useEffect(() => {
                   </thead>
                   <tbody>
                     {filteredEmployees.map((emp) => {
-                      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.salary || emp.basicSalary || 0).amount);
+                      const net = getEmployeeFinancialStatement(emp)?.estimatedNet ?? (Number(emp.basicSalary || emp.salary || 0) - getAdvanceDeductionDetails(emp, emp.basicSalary || emp.salary || 0).amount);
                       return (
                         <tr
                           key={emp.id}
