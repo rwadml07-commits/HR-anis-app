@@ -1458,6 +1458,9 @@ export default function HRManagementApp() {
   const [startEmptyDialogOpen, setStartEmptyDialogOpen] = useState(false);
   const [startEmptyConfirmText, setStartEmptyConfirmText] = useState("");
   const [startEmptyMessage, setStartEmptyMessage] = useState("");
+  const [clearDataDialogOpen, setClearDataDialogOpen] = useState(false);
+  const [clearDataConfirmText, setClearDataConfirmText] = useState("");
+  const [clearDataMessage, setClearDataMessage] = useState("");
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [leaveRequestDialogOpen, setLeaveRequestDialogOpen] = useState(false);
   const [advanceDialogOpen, setAdvanceDialogOpen] = useState(false);
@@ -5058,10 +5061,49 @@ useEffect(() => {
     setActiveTab("employees");
   };
 
-  const openPasswordDialog = () => {
-    setPasswordMessage("");
-    setPasswordForm({ currentPassword: "", newPassword: "", confirmPassword: "" });
-    setPasswordDialogOpen(true);
+  const clearEmployeesData = () => {
+    // Owner-only, irreversible. Clears all operational employee data
+    // (attendance, financial movements, requests, complaints) and resets each
+    // employee's advance balance to 0 — but KEEPS the employees themselves and
+    // their login accounts.
+    if (authUser?.role !== "owner") {
+      setClearDataMessage(language === "ar" ? "هذه العملية متاحة للمالك فقط." : "This action is available to the owner only.");
+      return;
+    }
+    if (String(clearDataConfirmText || "").trim() !== "مسح") {
+      setClearDataMessage(language === "ar" ? "اكتب كلمة \"مسح\" بالضبط لتأكيد العملية." : "Type \"مسح\" exactly to confirm.");
+      return;
+    }
+
+    // Clear ledgers: requests (advances, salary deposits, rewards, deductions,
+    // leaves, lateness) and complaints.
+    setRequests([]);
+    setComplaints([]);
+
+    // Reset each employee's advance balance and advance-deduction settings,
+    // while keeping all their personal/job data intact.
+    setEmployees((prev) => prev.map((emp) => ({
+      ...emp,
+      advance: 0,
+      advanceDeductionValue: 0,
+    })));
+
+    // Clear the fingerprint/attendance reports stored locally.
+    try {
+      localStorage.setItem(STORAGE_KEYS.attendanceReports, JSON.stringify([]));
+    } catch {}
+    setAttendanceReportsVersion((prev) => prev + 1);
+
+    setClearDataDialogOpen(false);
+    setClearDataConfirmText("");
+    setClearDataMessage("");
+    setSettingsOpen(false);
+  };
+
+  const openClearDataDialog = () => {
+    setClearDataConfirmText("");
+    setClearDataMessage("");
+    setClearDataDialogOpen(true);
   };
 
   const changePassword = () => {
@@ -8467,6 +8509,20 @@ useEffect(() => {
               </Button>
             </div>
           )}
+
+          {authUser?.role === "owner" && (
+            <div style={{ ...ui.settingsBox, border: "1px solid #fecaca", background: "#fef2f2" }}>
+              <div style={{ ...ui.settingsTitle, color: "#b91c1c" }}><Trash2 size={16} /> {language === "ar" ? "مسح بيانات الموظفين" : "Clear employees data"}</div>
+              <p style={{ margin: "0 0 10px", fontSize: 13, color: "#7f1d1d", lineHeight: 1.7 }}>
+                {language === "ar"
+                  ? "يمسح سجل البصمة وكشوف الحساب (السلف، المرتبات، المكافآت، الخصومات)، الطلبات والشكاوى، ويُصفّر رصيد السلف لكل موظف. يبقى الموظفون أنفسهم وحساباتهم كما هي. لا يمكن التراجع."
+                  : "Clears attendance log and account statements (advances, salaries, rewards, deductions), requests and complaints, and resets each employee's advance balance to 0. Employees and their accounts are kept. Cannot be undone."}
+              </p>
+              <Button variant="danger" onClick={openClearDataDialog}>
+                {language === "ar" ? "مسح بيانات الموظفين" : "Clear employees data"}
+              </Button>
+            </div>
+          )}
         </div>
       </Modal>
 
@@ -8535,6 +8591,33 @@ useEffect(() => {
             <Button variant="outline" onClick={() => setStartEmptyDialogOpen(false)}>{language === "ar" ? "إلغاء" : "Cancel"}</Button>
             <Button variant="danger" onClick={handleStartEmpty} disabled={String(startEmptyConfirmText || "").trim() !== "بدء فارغ"}>
               {language === "ar" ? "تأكيد البدء الفارغ" : "Confirm start empty"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal open={clearDataDialogOpen} title={language === "ar" ? "تأكيد مسح بيانات الموظفين" : "Confirm clear employees data"} onClose={() => setClearDataDialogOpen(false)} maxWidth={520}>
+        <div style={{ display: "grid", gap: 14 }}>
+          <div style={{ border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 8, padding: 14, color: "#7f1d1d", fontSize: 14, lineHeight: 1.8 }}>
+            {language === "ar"
+              ? "تحذير: سيُمسح سجل البصمة وكشوف الحساب (السلف، المرتبات، المكافآت، الخصومات)، الطلبات والشكاوى، ويُصفّر رصيد السلف لكل موظف. يبقى الموظفون أنفسهم وحساباتهم. لا يمكن التراجع — يُنصح بتصدير نسخة احتياطية أولاً."
+              : "Warning: attendance log, account statements (advances, salaries, rewards, deductions), requests and complaints will be cleared, and each employee's advance balance reset to 0. Employees and accounts are kept. Cannot be undone — export a backup first."}
+          </div>
+          <Field label={language === "ar" ? "اكتب \"مسح\" للتأكيد" : "Type \"مسح\" to confirm"}>
+            <Input value={clearDataConfirmText} onChange={(e) => { setClearDataConfirmText(e.target.value); setClearDataMessage(""); }} placeholder="مسح" />
+          </Field>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <Button variant="outline" onClick={exportSystemBackup}>
+              <Download size={16} /> {language === "ar" ? "تصدير نسخة احتياطية أولاً" : "Export backup first"}
+            </Button>
+          </div>
+          {clearDataMessage ? (
+            <p style={ui.errorText}>{clearDataMessage}</p>
+          ) : null}
+          <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
+            <Button variant="outline" onClick={() => setClearDataDialogOpen(false)}>{language === "ar" ? "إلغاء" : "Cancel"}</Button>
+            <Button variant="danger" onClick={clearEmployeesData} disabled={String(clearDataConfirmText || "").trim() !== "مسح"}>
+              {language === "ar" ? "تأكيد المسح" : "Confirm clear"}
             </Button>
           </div>
         </div>
