@@ -5061,7 +5061,7 @@ useEffect(() => {
     setActiveTab("employees");
   };
 
-  const clearEmployeesData = () => {
+  const clearEmployeesData = async () => {
     // Owner-only, irreversible. Clears all operational employee data
     // (attendance, financial movements, requests, complaints) and resets each
     // employee's advance balance to 0 — but KEEPS the employees themselves and
@@ -5075,24 +5075,44 @@ useEffect(() => {
       return;
     }
 
-    // Clear ledgers: requests (advances, salary deposits, rewards, deductions,
-    // leaves, lateness) and complaints.
-    setRequests([]);
-    setComplaints([]);
-
-    // Reset each employee's advance balance and advance-deduction settings,
-    // while keeping all their personal/job data intact.
-    setEmployees((prev) => prev.map((emp) => ({
+    // Build the cleared collections.
+    const clearedRequests = [];
+    const clearedComplaints = [];
+    const clearedEmployees = employees.map((emp) => ({
       ...emp,
       advance: 0,
       advanceDeductionValue: 0,
-    })));
+    }));
+
+    // Apply locally.
+    setRequests(clearedRequests);
+    setComplaints(clearedComplaints);
+    setEmployees(clearedEmployees);
 
     // Clear the fingerprint/attendance reports stored locally.
     try {
       localStorage.setItem(STORAGE_KEYS.attendanceReports, JSON.stringify([]));
     } catch {}
     setAttendanceReportsVersion((prev) => prev + 1);
+
+    // Push the cleared state to the cloud immediately so it persists and does
+    // NOT get re-synced back from the old cloud snapshot.
+    try {
+      await forceRemoteSaveSnapshot({
+        employees: clearedEmployees,
+        requests: clearedRequests,
+        users: systemUsers,
+        pending: pendingAccounts,
+        upgrades: upgradeRequests,
+        complaints: clearedComplaints,
+        chats,
+        chatCalls,
+        feedback: feedbackEntries,
+        attendanceReports: [],
+      });
+    } catch (e) {
+      console.error("Clear data cloud save failed:", e);
+    }
 
     setClearDataDialogOpen(false);
     setClearDataConfirmText("");
