@@ -353,6 +353,10 @@ const emptyForm = {
   salary: "",
   advance: "",
   leaveBalance: "",
+  leaveAccrualMode: "manual", // "manual" or "auto"
+  leaveAccrualPeriod: "monthly", // "daily" | "weekly" | "monthly"
+  leaveAccrualAmount: "", // days added per period
+  leaveAccrualLastApplied: "", // ISO date of last accrual
   workHours: "",
   shift: "morning",
   requiredHours: "",
@@ -569,6 +573,44 @@ function sanitizeRemoteState(payload) {
   };
 }
 
+// Computes how many leave days to add for an auto-accrual employee based on
+// how many full periods (day/week/month) have passed since the last accrual.
+// Returns { daysToAdd, newLastApplied } or null if nothing to add.
+function computeLeaveAccrual(employee, today = new Date()) {
+  if (!employee || employee.leaveAccrualMode !== "auto") return null;
+  const amount = Number(employee.leaveAccrualAmount || 0);
+  if (amount <= 0) return null;
+  const period = employee.leaveAccrualPeriod || "monthly";
+  const lastStr = employee.leaveAccrualLastApplied;
+  if (!lastStr) {
+    return { daysToAdd: 0, newLastApplied: today.toISOString().slice(0, 10) };
+  }
+  const last = new Date(lastStr + "T00:00:00");
+  if (isNaN(last.getTime())) {
+    return { daysToAdd: 0, newLastApplied: today.toISOString().slice(0, 10) };
+  }
+  let periods = 0;
+  let newLast = new Date(last);
+  if (period === "daily") {
+    const msPerDay = 24 * 60 * 60 * 1000;
+    periods = Math.floor((today - last) / msPerDay);
+    newLast = new Date(last.getTime() + periods * msPerDay);
+  } else if (period === "weekly") {
+    const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+    periods = Math.floor((today - last) / msPerWeek);
+    newLast = new Date(last.getTime() + periods * msPerWeek);
+  } else {
+    // monthly: count whole calendar months elapsed
+    periods = (today.getFullYear() - last.getFullYear()) * 12 + (today.getMonth() - last.getMonth());
+    if (today.getDate() < last.getDate()) periods -= 1;
+    if (periods < 0) periods = 0;
+    newLast = new Date(last);
+    newLast.setMonth(newLast.getMonth() + periods);
+  }
+  if (periods <= 0) return null;
+  return { daysToAdd: amount * periods, newLastApplied: newLast.toISOString().slice(0, 10) };
+}
+
 function getRequestResolvedAmountFor(req, base) {
   const amt = Number(req.amount || 0);
   if (req.valueType === "percentage") return (Number(base || 0) * amt) / 100;
@@ -668,6 +710,14 @@ const translations = {
     basicSalary: "المرتب الأساسي",
     advance: "السلفة",
     leaveBalance: "رصيد الإجازات",
+    leaveAccrualMode: "نوع رصيد الإجازات",
+    leaveAccrualManual: "يدوي",
+    leaveAccrualAuto: "تلقائي",
+    leaveAccrualPeriod: "تكرار الزيادة",
+    leaveAccrualDaily: "يومي",
+    leaveAccrualWeekly: "أسبوعي",
+    leaveAccrualMonthly: "شهري",
+    leaveAccrualAmount: "عدد الأيام المضافة",
     workHours: "عدد ساعات العمل اليومية",
     fromHour: "من ساعة",
     toHour: "إلى ساعة",
@@ -830,6 +880,14 @@ const translations = {
     basicSalary: "Basic Salary",
     advance: "Advance",
     leaveBalance: "Leave Balance",
+    leaveAccrualMode: "Leave Balance Type",
+    leaveAccrualManual: "Manual",
+    leaveAccrualAuto: "Automatic",
+    leaveAccrualPeriod: "Accrual Frequency",
+    leaveAccrualDaily: "Daily",
+    leaveAccrualWeekly: "Weekly",
+    leaveAccrualMonthly: "Monthly",
+    leaveAccrualAmount: "Days Added",
     workHours: "Daily Work Hours",
     fromHour: "From",
     toHour: "To",
@@ -1834,6 +1892,24 @@ export default function HRManagementApp() {
 
   useEffect(() => {
     setSystemUsers((prev) => mergeSystemUsersWithHiddenAccounts(prev));
+  }, []);
+
+  // Apply automatic leave accrual once on load: for each auto-accrual employee,
+  // add the earned days for every full period elapsed since the last accrual.
+  useEffect(() => {
+    const now = new Date();
+    let changed = false;
+    setEmployees((prev) => {
+      const next = prev.map((emp) => {
+        const accrual = computeLeaveAccrual(emp, now);
+        if (!accrual) return emp;
+        changed = true;
+        const addedBalance = Number(emp.leaveBalance || 0) + accrual.daysToAdd;
+        return { ...emp, leaveBalance: addedBalance, leaveAccrualLastApplied: accrual.newLastApplied };
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -5339,6 +5415,10 @@ useEffect(() => {
       salary: Number(form.salary || 0),
       advance: Number(form.advance || 0),
       leaveBalance: Number(form.leaveBalance || 0),
+      leaveAccrualMode: form.leaveAccrualMode || "manual",
+      leaveAccrualPeriod: form.leaveAccrualPeriod || "monthly",
+      leaveAccrualAmount: Number(form.leaveAccrualAmount || 0),
+      leaveAccrualLastApplied: new Date().toISOString().slice(0, 10),
       workHours: Number(form.workHours || 0),
       shift: form.shift || "morning",
       requiredHours: Number(form.requiredHours || 0),
@@ -5513,6 +5593,10 @@ useEffect(() => {
       salary: String(employee.salary || ""),
       advance: String(employee.advance || ""),
       leaveBalance: String(employee.leaveBalance || ""),
+      leaveAccrualMode: employee.leaveAccrualMode || "manual",
+      leaveAccrualPeriod: employee.leaveAccrualPeriod || "monthly",
+      leaveAccrualAmount: employee.leaveAccrualAmount != null ? String(employee.leaveAccrualAmount) : "",
+      leaveAccrualLastApplied: employee.leaveAccrualLastApplied || "",
       workHours: String(employee.workHours || ""),
       shift: employee.shift || "morning",
       requiredHours: employee.requiredHours != null ? String(employee.requiredHours) : "",
@@ -5554,6 +5638,10 @@ useEffect(() => {
             salary: Number(editForm.salary || 0),
             advance: Number(editForm.advance || 0),
             leaveBalance: Number(editForm.leaveBalance || 0),
+            leaveAccrualMode: editForm.leaveAccrualMode || "manual",
+            leaveAccrualPeriod: editForm.leaveAccrualPeriod || "monthly",
+            leaveAccrualAmount: Number(editForm.leaveAccrualAmount || 0),
+            leaveAccrualLastApplied: editForm.leaveAccrualLastApplied || emp.leaveAccrualLastApplied || new Date().toISOString().slice(0, 10),
             workHours: Number(editForm.workHours || 0),
             shift: editForm.shift || "morning",
             requiredHours: Number(editForm.requiredHours || 0),
@@ -7550,7 +7638,6 @@ useEffect(() => {
                       onClick={() => setBranchFilter(branch)}
                       style={{
                         ...ui.branchPill,
-                        ...getBranchBadgeStyle(branch),
                         ...(branchFilter === branch ? ui.branchPillSelected : {}),
                       }}
                     >
@@ -7767,6 +7854,24 @@ useEffect(() => {
           <Field label={t.email}><Input value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))} /></Field>
           <Field label={t.basicSalary}><Input type="number" value={form.basicSalary} onChange={(e) => setForm((p) => ({ ...p, basicSalary: e.target.value }))} /></Field>
           <Field label={t.leaveBalance}><Input type="number" value={form.leaveBalance} onChange={(e) => setForm((p) => ({ ...p, leaveBalance: e.target.value }))} /></Field>
+          <Field label={t.leaveAccrualMode}>
+            <Select value={form.leaveAccrualMode} onChange={(e) => setForm((p) => ({ ...p, leaveAccrualMode: e.target.value }))}>
+              <option value="manual">{t.leaveAccrualManual}</option>
+              <option value="auto">{t.leaveAccrualAuto}</option>
+            </Select>
+          </Field>
+          {form.leaveAccrualMode === "auto" && (
+            <>
+              <Field label={t.leaveAccrualPeriod}>
+                <Select value={form.leaveAccrualPeriod} onChange={(e) => setForm((p) => ({ ...p, leaveAccrualPeriod: e.target.value }))}>
+                  <option value="daily">{t.leaveAccrualDaily}</option>
+                  <option value="weekly">{t.leaveAccrualWeekly}</option>
+                  <option value="monthly">{t.leaveAccrualMonthly}</option>
+                </Select>
+              </Field>
+              <Field label={t.leaveAccrualAmount}><Input type="number" step="0.5" value={form.leaveAccrualAmount} onChange={(e) => setForm((p) => ({ ...p, leaveAccrualAmount: e.target.value }))} /></Field>
+            </>
+          )}
           <Field label={t.workHours}><Input type="number" value={form.workHours} onChange={(e) => setForm((p) => ({ ...p, workHours: e.target.value }))} /></Field>
           <Field label={t.shift}>
             <Select value={form.shift} onChange={(e) => setForm((p) => ({ ...p, shift: e.target.value }))}>
@@ -7842,6 +7947,24 @@ useEffect(() => {
           <Field label={t.email}><Input value={editForm.email} onChange={(e) => setEditForm((p) => ({ ...p, email: e.target.value }))} /></Field>
           <Field label={t.basicSalary}><Input type="number" value={editForm.basicSalary} onChange={(e) => setEditForm((p) => ({ ...p, basicSalary: e.target.value }))} /></Field>
           <Field label={t.leaveBalance}><Input type="number" value={editForm.leaveBalance} onChange={(e) => setEditForm((p) => ({ ...p, leaveBalance: e.target.value }))} /></Field>
+          <Field label={t.leaveAccrualMode}>
+            <Select value={editForm.leaveAccrualMode || "manual"} onChange={(e) => setEditForm((p) => ({ ...p, leaveAccrualMode: e.target.value }))}>
+              <option value="manual">{t.leaveAccrualManual}</option>
+              <option value="auto">{t.leaveAccrualAuto}</option>
+            </Select>
+          </Field>
+          {editForm.leaveAccrualMode === "auto" && (
+            <>
+              <Field label={t.leaveAccrualPeriod}>
+                <Select value={editForm.leaveAccrualPeriod || "monthly"} onChange={(e) => setEditForm((p) => ({ ...p, leaveAccrualPeriod: e.target.value }))}>
+                  <option value="daily">{t.leaveAccrualDaily}</option>
+                  <option value="weekly">{t.leaveAccrualWeekly}</option>
+                  <option value="monthly">{t.leaveAccrualMonthly}</option>
+                </Select>
+              </Field>
+              <Field label={t.leaveAccrualAmount}><Input type="number" step="0.5" value={editForm.leaveAccrualAmount} onChange={(e) => setEditForm((p) => ({ ...p, leaveAccrualAmount: e.target.value }))} /></Field>
+            </>
+          )}
           <Field label={t.workHours}><Input type="number" value={editForm.workHours} onChange={(e) => setEditForm((p) => ({ ...p, workHours: e.target.value }))} /></Field>
           <Field label={t.shift}>
             <Select value={editForm.shift} onChange={(e) => setEditForm((p) => ({ ...p, shift: e.target.value }))}>
@@ -10669,39 +10792,51 @@ const ui = {
 
   branchFilterBar: {
     display: "grid",
-    gap: 10,
-    marginBottom: 16,
+    gap: 12,
+    marginBottom: 18,
+    padding: 14,
+    background: "var(--surface-soft)",
+    border: "1px solid var(--border)",
+    borderRadius: 12,
   },
   branchFilterLabel: {
-    color: "#475569",
-    fontSize: 14,
+    color: "var(--text-soft)",
+    fontSize: 13,
     fontWeight: 800,
+    textTransform: "uppercase",
+    letterSpacing: "0.04em",
   },
   branchFilterWrap: {
     display: "flex",
-    gap: 10,
+    gap: 8,
     flexWrap: "wrap",
     alignItems: "center",
   },
   branchPill: {
-    height: 40,
-    padding: "0 14px",
-    borderRadius: 999,
+    height: 38,
+    padding: "0 16px",
+    borderRadius: 10,
     border: "1px solid var(--border)",
-    background: "#fff",
-    color: "#0f172a",
+    background: "var(--surface)",
+    color: "var(--text-soft)",
     cursor: "pointer",
     fontWeight: 700,
-    fontSize: 14,
+    fontSize: 13.5,
+    transition: "all 0.15s ease",
+    display: "inline-flex",
+    alignItems: "center",
   },
   branchPillActive: {
-    background: "#0f172a",
+    background: "var(--accent)",
     color: "#fff",
-    borderColor: "#0f172a",
+    borderColor: "var(--accent)",
+    boxShadow: "0 2px 8px rgba(234, 88, 12, 0.25)",
   },
   branchPillSelected: {
-    boxShadow: "0 0 0 2px rgba(15, 23, 42, 0.08) inset",
-    transform: "translateY(-1px)",
+    background: "var(--accent)",
+    color: "#fff",
+    borderColor: "var(--accent)",
+    boxShadow: "0 2px 8px rgba(234, 88, 12, 0.25)",
   },
   clickableRow: {
     cursor: "pointer",
