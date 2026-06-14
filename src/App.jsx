@@ -320,27 +320,14 @@ function mergeSystemUsersWithHiddenAccounts(list) {
   const incoming = Array.isArray(list) ? list.map((user) => ({ ...user })) : [];
   const defaultOwner = initialSystemUsers.find((u) => u.role === "owner" && !isHiddenAccount(u));
   const ownerPhone = String(defaultOwner?.phone || "").trim();
-  // Drop any stale primary-owner account whose phone differs from the current
-  // default owner phone (e.g. an old number kept from a previous session).
-  const filtered = incoming.filter((user) => {
-    if (user?.role === "owner" && !isHiddenAccount(user)) {
-      return String(user?.phone || "").trim() === ownerPhone;
-    }
-    return true;
-  });
-  const byPhone = new Map(filtered.map((user) => [String(user?.phone || '').trim(), user]));
-  // Always ensure the default owner account exists, but preserve any saved
-  // changes (especially a changed password) from the stored account.
-  if (defaultOwner && ownerPhone) {
-    const savedOwner = byPhone.get(ownerPhone) || {};
-    byPhone.set(ownerPhone, {
-      ...defaultOwner,
-      ...savedOwner,
-      phone: ownerPhone,
-      role: "owner",
-      // Keep the saved password if the owner changed it; otherwise default.
-      password: savedOwner.password || defaultOwner.password,
-    });
+  // NOTE: we do NOT drop other owner accounts. Employees promoted to "owner"
+  // have a different phone, and filtering them out would delete their account
+  // (and password) and lock them out. We keep everyone as-is.
+  const byPhone = new Map(incoming.map((user) => [String(user?.phone || '').trim(), user]));
+  // Ensure the default owner account always exists, preserving any saved
+  // password change for that specific default-owner phone.
+  if (defaultOwner && ownerPhone && !byPhone.has(ownerPhone)) {
+    byPhone.set(ownerPhone, { ...defaultOwner });
   }
   initialSystemUsers.forEach((defaultUser) => {
     const key = String(defaultUser?.phone || '').trim();
@@ -4824,17 +4811,21 @@ useEffect(() => {
           : user
       );
     } else {
+      // No account yet — create one. Reuse a password if one already exists
+      // anywhere for this phone; otherwise default. Do NOT force a password
+      // change (that was making the password seem to "disappear").
+      const knownPassword = systemUsers.find((u) => u.phone === request.employeePhone)?.password || "123456";
       updatedUsers = [
         ...systemUsers,
         {
           phone: request.employeePhone,
-          password: "123456",
+          password: knownPassword,
           role: request.requestedRole,
           name: request.employeeName,
           managedDepartment: targetManagedDepartment,
           managedBranch: resolvedManagedBranch,
-          mustChangePassword: true,
-          passwordChangedOnce: false,
+          mustChangePassword: false,
+          passwordChangedOnce: true,
         },
       ];
     }
@@ -4855,14 +4846,18 @@ useEffect(() => {
     }
 
     // Sync immediately so the upgrade (and preserved password) is not
-    // overwritten by the old cloud snapshot.
+    // overwritten by the old cloud snapshot. Ensure the current request is
+    // included in the upgrades list we push (state may not be flushed yet).
+    const upgradesForSync = upgradeRequests.some((r) => r.id === request.id)
+      ? upgradeRequests
+      : [request, ...upgradeRequests];
     try {
       await forceRemoteSaveSnapshot({
         employees,
         requests,
         users: updatedUsers,
         pending: pendingAccounts,
-        upgrades: upgradeRequests,
+        upgrades: upgradesForSync,
         complaints,
         chats,
         chatCalls,
