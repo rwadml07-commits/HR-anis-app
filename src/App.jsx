@@ -5469,7 +5469,7 @@ useEffect(() => {
       name: employee.name || "",
       fingerprintId: String(employee.fingerprintId || ""),
       department: employee.department || "",
-      password: systemUsers.find((u) => u.phone === employee.phone)?.password || "",
+      password: "",
       managerDepartment: employee.managerDepartment || "",
       location: employee.location || "",
       phone: employee.phone || "",
@@ -5538,20 +5538,37 @@ useEffect(() => {
       )
     );
 
-    setSystemUsers((prev) =>
-      prev.map((user) =>
-        user.phone === selectedEmployee.phone
-          ? {
-              ...user,
-              phone: editForm.phone,
-              password: editForm.password || user.password,
-              name: editForm.name,
-              managedDepartment: editForm.managerDepartment || editForm.department,
-              managedBranch: editForm.location || user.managedBranch || "",
-            }
-          : user
-      )
-    );
+    setSystemUsers((prev) => {
+      const existing = prev.find((user) => user.phone === selectedEmployee.phone);
+      if (existing) {
+        // Update the existing account; keep old password if field left blank.
+        return prev.map((user) =>
+          user.phone === selectedEmployee.phone
+            ? {
+                ...user,
+                phone: editForm.phone,
+                password: editForm.password || user.password,
+                name: editForm.name,
+                managedDepartment: editForm.managerDepartment || editForm.department,
+                managedBranch: editForm.location || user.managedBranch || "",
+              }
+            : user
+        );
+      }
+      // No account yet for this employee — create one so login works.
+      return [
+        ...prev,
+        {
+          phone: editForm.phone,
+          password: editForm.password || "123456",
+          role: "employee",
+          name: editForm.name,
+          managedDepartment: editForm.managerDepartment || editForm.department || "",
+          managedBranch: editForm.location || "",
+          mustChangePassword: false,
+        },
+      ];
+    });
 
     setEditDialogOpen(false);
     setSelectedEmployee(null);
@@ -7761,7 +7778,7 @@ useEffect(() => {
           <Field label={language === "ar" ? "رقم البصمة (Person ID)" : "Fingerprint ID (Person ID)"}><Input value={editForm.fingerprintId} onChange={(e) => setEditForm((p) => ({ ...p, fingerprintId: e.target.value }))} placeholder={language === "ar" ? "مثال: 0001" : "e.g. 0001"} /></Field>
           <Field label={t.department}><Input value={editForm.department} onChange={(e) => setEditForm((p) => ({ ...p, department: e.target.value }))} /></Field>
           <Field label={t.managerDepartment}><Input value={editForm.managerDepartment} onChange={(e) => setEditForm((p) => ({ ...p, managerDepartment: e.target.value }))} /></Field>
-          <Field label={t.password}><PasswordInput value={editForm.password} onChange={(e) => setEditForm((p) => ({ ...p, password: e.target.value }))} /></Field>
+          <Field label={t.password}><PasswordInput value={editForm.password} onChange={(e) => setEditForm((p) => ({ ...p, password: e.target.value }))} placeholder={language === "ar" ? "اتركها فارغة للإبقاء على كلمة المرور الحالية" : "Leave blank to keep current password"} /></Field>
           <Field label={t.phone}><Input value={editForm.phone} onChange={(e) => setEditForm((p) => ({ ...p, phone: e.target.value }))} /></Field>
           <Field label={t.location}>
             <Select value={editForm.location} onChange={(e) => setEditForm((p) => ({ ...p, location: e.target.value }))}>
