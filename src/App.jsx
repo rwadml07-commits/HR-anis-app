@@ -1614,7 +1614,7 @@ export default function HRManagementApp() {
 
   // A user is "upgraded" if their real role is above a regular employee.
   const realRole = authUser?.role;
-  const isUpgradedUser = ["hr", "branch_manager", "department_manager"].includes(realRole);
+  const isUpgradedUser = ["owner", "hr", "branch_manager", "department_manager"].includes(realRole);
   // When an upgraded user switches to personal view, treat them as an employee.
   const effectiveRole = isUpgradedUser && viewMode === "employee" ? "employee" : realRole;
 
