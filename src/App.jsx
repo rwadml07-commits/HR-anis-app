@@ -4754,16 +4754,18 @@ useEffect(() => {
 
 
 
-  const cancelRoleUpgrade = (request) => {
+  const cancelRoleUpgrade = async (request) => {
     if (!request) return;
     if (!canManageAll) return; // Owner/HR only.
 
     // Revert the user back to a regular employee and clear managed scope.
-    setSystemUsers((prev) => prev.map((user) =>
+    // (Password is left untouched.)
+    const updatedUsers = systemUsers.map((user) =>
       user.phone === request.employeePhone
         ? { ...user, role: "employee", managedDepartment: "", managedBranch: "" }
         : user
-    ));
+    );
+    setSystemUsers(updatedUsers);
 
     // If the affected user is currently logged in, downgrade their session too.
     if (authUser?.phone === request.employeePhone) {
@@ -4772,12 +4774,29 @@ useEffect(() => {
     }
 
     // Mark the upgrade request as cancelled in the history.
-    setUpgradeRequests((prev) => prev.map((req) =>
+    const updatedUpgrades = upgradeRequests.map((req) =>
       req.id === request.id ? { ...req, status: "ملغاة" } : req
-    ));
+    );
+    setUpgradeRequests(updatedUpgrades);
+
+    try {
+      await forceRemoteSaveSnapshot({
+        employees,
+        requests,
+        users: updatedUsers,
+        pending: pendingAccounts,
+        upgrades: updatedUpgrades,
+        complaints,
+        chats,
+        chatCalls,
+        feedback: feedbackEntries,
+      });
+    } catch (e) {
+      console.error("Cancel upgrade cloud sync failed:", e);
+    }
   };
 
-  const applyUserRoleUpgrade = (request) => {
+  const applyUserRoleUpgrade = async (request) => {
     const employee = employees.find((emp) => emp.phone === request.employeePhone);
     const targetBranch = request.branch || employee?.location || "";
     const targetManagedDepartment = request.requestedRole === "department_manager"
@@ -4789,23 +4808,24 @@ useEffect(() => {
       ? targetBranch
       : (isWideScope ? "all" : targetBranch);
 
-    setSystemUsers((prev) => {
-      const exists = prev.some((user) => user.phone === request.employeePhone);
-      if (exists) {
-        return prev.map((user) =>
-          user.phone === request.employeePhone
-            ? {
-                ...user,
-                name: request.employeeName || user.name,
-                role: request.requestedRole,
-                managedDepartment: targetManagedDepartment,
-                managedBranch: resolvedManagedBranch,
-              }
-            : user
-        );
-      }
-      return [
-        ...prev,
+    const existingAccount = systemUsers.find((user) => user.phone === request.employeePhone);
+    let updatedUsers;
+    if (existingAccount) {
+      // Keep the existing password — only change the role/scope.
+      updatedUsers = systemUsers.map((user) =>
+        user.phone === request.employeePhone
+          ? {
+              ...user,
+              name: request.employeeName || user.name,
+              role: request.requestedRole,
+              managedDepartment: targetManagedDepartment,
+              managedBranch: resolvedManagedBranch,
+            }
+          : user
+      );
+    } else {
+      updatedUsers = [
+        ...systemUsers,
         {
           phone: request.employeePhone,
           password: "123456",
@@ -4817,7 +4837,8 @@ useEffect(() => {
           passwordChangedOnce: false,
         },
       ];
-    });
+    }
+    setSystemUsers(updatedUsers);
 
     if (authUser?.phone === request.employeePhone) {
       setAuthUser((prev) =>
@@ -4831,6 +4852,24 @@ useEffect(() => {
             }
           : prev
       );
+    }
+
+    // Sync immediately so the upgrade (and preserved password) is not
+    // overwritten by the old cloud snapshot.
+    try {
+      await forceRemoteSaveSnapshot({
+        employees,
+        requests,
+        users: updatedUsers,
+        pending: pendingAccounts,
+        upgrades: upgradeRequests,
+        complaints,
+        chats,
+        chatCalls,
+        feedback: feedbackEntries,
+      });
+    } catch (e) {
+      console.error("Upgrade cloud sync failed:", e);
     }
   };
 
