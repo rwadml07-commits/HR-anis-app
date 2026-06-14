@@ -5469,7 +5469,7 @@ useEffect(() => {
       name: employee.name || "",
       fingerprintId: String(employee.fingerprintId || ""),
       department: employee.department || "",
-      password: systemUsers.find((u) => u.phone === employee.phone)?.password || "",
+      password: systemUsers.find((u) => u.phone === employee.phone)?.password || "123456",
       managerDepartment: employee.managerDepartment || "",
       location: employee.location || "",
       phone: employee.phone || "",
@@ -5500,64 +5500,60 @@ useEffect(() => {
     setEmployees((prev) => prev.map((emp) => emp.id === employeeId ? { ...emp, fingerprintId: clean } : emp));
   };
 
-  const saveEmployeeEdit = () => {
+  const saveEmployeeEdit = async () => {
     if (!selectedEmployee) return;
     if (employees.some((emp) => emp.phone === editForm.phone && emp.id !== selectedEmployee.id)) return;
 
-    setEmployees((prev) =>
-      prev.map((emp) =>
-        emp.id === selectedEmployee.id
-          ? {
-              ...emp,
-              name: editForm.name,
-              fingerprintId: String(editForm.fingerprintId || "").trim(),
-              department: editForm.department,
-              managerDepartment: editForm.managerDepartment,
-              location: editForm.location,
-              phone: editForm.phone,
-              email: editForm.email,
-              description: editForm.description,
-              basicSalary: Number(editForm.basicSalary || editForm.salary || 0),
-              salary: Number(editForm.salary || 0),
-              advance: Number(editForm.advance || 0),
-              leaveBalance: Number(editForm.leaveBalance || 0),
-              workHours: Number(editForm.workHours || 0),
-              shift: editForm.shift || "morning",
-              requiredHours: Number(editForm.requiredHours || 0),
-              requiredMinutes: Number(editForm.requiredMinutes || 0),
-              fromHour: editForm.fromHour || "",
-              toHour: editForm.toHour || "",
-              attendanceLateDeductionMode: editForm.attendanceLateDeductionMode || "automatic",
-              attendanceLateValueType: editForm.attendanceLateValueType || "amount",
-              attendanceLateValue: Number(editForm.attendanceLateValue || 0),
-              attendanceAbsenceDeductionMode: editForm.attendanceAbsenceDeductionMode || "automatic",
-              attendanceAbsenceValueType: editForm.attendanceAbsenceValueType || "amount",
-              attendanceAbsenceValue: Number(editForm.attendanceAbsenceValue || 0),
-            }
-          : emp
-      )
+    const updatedEmployees = employees.map((emp) =>
+      emp.id === selectedEmployee.id
+        ? {
+            ...emp,
+            name: editForm.name,
+            fingerprintId: String(editForm.fingerprintId || "").trim(),
+            department: editForm.department,
+            managerDepartment: editForm.managerDepartment,
+            location: editForm.location,
+            phone: editForm.phone,
+            email: editForm.email,
+            description: editForm.description,
+            basicSalary: Number(editForm.basicSalary || editForm.salary || 0),
+            salary: Number(editForm.salary || 0),
+            advance: Number(editForm.advance || 0),
+            leaveBalance: Number(editForm.leaveBalance || 0),
+            workHours: Number(editForm.workHours || 0),
+            shift: editForm.shift || "morning",
+            requiredHours: Number(editForm.requiredHours || 0),
+            requiredMinutes: Number(editForm.requiredMinutes || 0),
+            fromHour: editForm.fromHour || "",
+            toHour: editForm.toHour || "",
+            attendanceLateDeductionMode: editForm.attendanceLateDeductionMode || "automatic",
+            attendanceLateValueType: editForm.attendanceLateValueType || "amount",
+            attendanceLateValue: Number(editForm.attendanceLateValue || 0),
+            attendanceAbsenceDeductionMode: editForm.attendanceAbsenceDeductionMode || "automatic",
+            attendanceAbsenceValueType: editForm.attendanceAbsenceValueType || "amount",
+            attendanceAbsenceValue: Number(editForm.attendanceAbsenceValue || 0),
+          }
+        : emp
     );
 
-    setSystemUsers((prev) => {
-      const existing = prev.find((user) => user.phone === selectedEmployee.phone);
-      if (existing) {
-        // Update the existing account; keep old password if field left blank.
-        return prev.map((user) =>
-          user.phone === selectedEmployee.phone
-            ? {
-                ...user,
-                phone: editForm.phone,
-                password: editForm.password || user.password,
-                name: editForm.name,
-                managedDepartment: editForm.managerDepartment || editForm.department,
-                managedBranch: editForm.location || user.managedBranch || "",
-              }
-            : user
-        );
-      }
-      // No account yet for this employee — create one so login works.
-      return [
-        ...prev,
+    const existingAccount = systemUsers.find((user) => user.phone === selectedEmployee.phone);
+    let updatedUsers;
+    if (existingAccount) {
+      updatedUsers = systemUsers.map((user) =>
+        user.phone === selectedEmployee.phone
+          ? {
+              ...user,
+              phone: editForm.phone,
+              password: editForm.password || user.password,
+              name: editForm.name,
+              managedDepartment: editForm.managerDepartment || editForm.department,
+              managedBranch: editForm.location || user.managedBranch || "",
+            }
+          : user
+      );
+    } else {
+      updatedUsers = [
+        ...systemUsers,
         {
           phone: editForm.phone,
           password: editForm.password || "123456",
@@ -5568,7 +5564,28 @@ useEffect(() => {
           mustChangePassword: false,
         },
       ];
-    });
+    }
+
+    setEmployees(updatedEmployees);
+    setSystemUsers(updatedUsers);
+
+    // Push to the cloud immediately so the password/account change is not
+    // overwritten by the old cloud snapshot on the next sync.
+    try {
+      await forceRemoteSaveSnapshot({
+        employees: updatedEmployees,
+        requests,
+        users: updatedUsers,
+        pending: pendingAccounts,
+        upgrades: upgradeRequests,
+        complaints,
+        chats,
+        chatCalls,
+        feedback: feedbackEntries,
+      });
+    } catch (e) {
+      console.error("Save employee cloud sync failed:", e);
+    }
 
     setEditDialogOpen(false);
     setSelectedEmployee(null);
