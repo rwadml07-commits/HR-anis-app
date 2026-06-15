@@ -5302,7 +5302,7 @@ useEffect(() => {
     setPasswordDialogOpen(true);
   };
 
-  const changePassword = () => {
+  const changePassword = async () => {
     if (!authUser) return;
     if (!passwordForm.newPassword || !passwordForm.confirmPassword) {
       setPasswordMessage(language === "ar" ? "اكتب كلمة المرور الجديدة وأكدها" : "Enter and confirm the new password.");
@@ -5316,12 +5316,41 @@ useEffect(() => {
       setPasswordMessage(language === "ar" ? "كلمة المرور الحالية غير صحيحة" : "Current password is incorrect.");
       return;
     }
+
     const nextUsers = systemUsers.map((user) =>
       user.phone === authUser.phone
         ? { ...user, password: passwordForm.newPassword, mustChangePassword: false, passwordChangedOnce: true }
         : user
     );
     const nextAuth = { ...authUser, password: passwordForm.newPassword, mustChangePassword: false, passwordChangedOnce: true };
+
+    // Write the new password to the CLOUD first. Only if the cloud save
+    // succeeds do we apply it locally — this replaces the old password in the
+    // cloud directly and avoids any local/cloud conflict.
+    if (cloudEnabled) {
+      setPasswordMessage(language === "ar" ? "جاري الحفظ على السحابة..." : "Saving to cloud...");
+      try {
+        await forceRemoteSaveSnapshot({
+          employees,
+          requests,
+          users: nextUsers,
+          pending: pendingAccounts,
+          upgrades: upgradeRequests,
+          complaints,
+          chats,
+          chatCalls,
+          feedback: feedbackEntries,
+        });
+      } catch (e) {
+        console.error("Change password cloud save failed:", e);
+        setPasswordMessage(language === "ar"
+          ? "تعذّر حفظ كلمة المرور على السحابة. تأكد من الاتصال بالإنترنت وحاول مرة أخرى."
+          : "Could not save the password to the cloud. Check your connection and try again.");
+        return; // Do NOT change locally if the cloud save failed.
+      }
+    }
+
+    // Cloud save succeeded (or cloud is disabled) — apply locally.
     setSystemUsers(nextUsers);
     setAuthUser(nextAuth);
     setPasswordMessage(language === "ar" ? "تم تغيير كلمة المرور بنجاح" : "Password changed successfully.");
