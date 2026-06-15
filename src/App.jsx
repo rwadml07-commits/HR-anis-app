@@ -5325,33 +5325,46 @@ useEffect(() => {
     );
     const nextAuth = { ...authUser, password: passwordForm.newPassword, mustChangePassword: false, passwordChangedOnce: true };
 
+    // Password changes REQUIRE an internet connection and cloud sync. We never
+    // change the password while offline — it must be written to the cloud.
+    if (!cloudEnabled) {
+      setPasswordMessage(language === "ar"
+        ? "تغيير كلمة المرور يتطلب الاتصال بالسحابة. الميزة غير مفعّلة حاليًا."
+        : "Changing the password requires cloud sync, which is not enabled.");
+      return;
+    }
+    if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      setPasswordMessage(language === "ar"
+        ? "لا يوجد اتصال بالإنترنت. لا يمكن تغيير كلمة المرور إلا بوجود إنترنت."
+        : "No internet connection. The password can only be changed while online.");
+      return;
+    }
+
     // Write the new password to the CLOUD first. Only if the cloud save
     // succeeds do we apply it locally — this replaces the old password in the
     // cloud directly and avoids any local/cloud conflict.
-    if (cloudEnabled) {
-      setPasswordMessage(language === "ar" ? "جاري الحفظ على السحابة..." : "Saving to cloud...");
-      try {
-        await forceRemoteSaveSnapshot({
-          employees,
-          requests,
-          users: nextUsers,
-          pending: pendingAccounts,
-          upgrades: upgradeRequests,
-          complaints,
-          chats,
-          chatCalls,
-          feedback: feedbackEntries,
-        });
-      } catch (e) {
-        console.error("Change password cloud save failed:", e);
-        setPasswordMessage(language === "ar"
-          ? "تعذّر حفظ كلمة المرور على السحابة. تأكد من الاتصال بالإنترنت وحاول مرة أخرى."
-          : "Could not save the password to the cloud. Check your connection and try again.");
-        return; // Do NOT change locally if the cloud save failed.
-      }
+    setPasswordMessage(language === "ar" ? "جاري الحفظ على السحابة..." : "Saving to cloud...");
+    try {
+      await forceRemoteSaveSnapshot({
+        employees,
+        requests,
+        users: nextUsers,
+        pending: pendingAccounts,
+        upgrades: upgradeRequests,
+        complaints,
+        chats,
+        chatCalls,
+        feedback: feedbackEntries,
+      });
+    } catch (e) {
+      console.error("Change password cloud save failed:", e);
+      setPasswordMessage(language === "ar"
+        ? "تعذّر حفظ كلمة المرور على السحابة. تأكد من الاتصال بالإنترنت وحاول مرة أخرى."
+        : "Could not save the password to the cloud. Check your connection and try again.");
+      return; // Do NOT change locally if the cloud save failed.
     }
 
-    // Cloud save succeeded (or cloud is disabled) — apply locally.
+    // Cloud save succeeded — apply locally.
     setSystemUsers(nextUsers);
     setAuthUser(nextAuth);
     setPasswordMessage(language === "ar" ? "تم تغيير كلمة المرور بنجاح" : "Password changed successfully.");
