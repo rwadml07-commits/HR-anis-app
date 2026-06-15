@@ -54,6 +54,7 @@ import {
   Eye,
   EyeOff,
   Upload,
+  Building2,
 } from "lucide-react";
 
 // === Artifact-preview compatibility shim ===
@@ -7657,22 +7658,34 @@ useEffect(() => {
                     onClick={() => setBranchFilter("all")}
                     style={{ ...ui.branchPill, ...(branchFilter === "all" ? ui.branchPillActive : {}) }}
                   >
-                    {language === "ar" ? "كل الفروع" : "All Branches"}
+                    <Building2 size={16} />
+                    <span>{language === "ar" ? "كل الفروع" : "All Branches"}</span>
+                    <span style={{ ...ui.branchPillCount, ...(branchFilter === "all" ? ui.branchPillCountActive : {}) }}>
+                      {visibleEmployees.length}
+                    </span>
                   </button>
 
-                  {BRANCH_OPTIONS.map((branch) => (
-                    <button
-                      key={branch}
-                      type="button"
-                      onClick={() => setBranchFilter(branch)}
-                      style={{
-                        ...ui.branchPill,
-                        ...(branchFilter === branch ? ui.branchPillSelected : {}),
-                      }}
-                    >
-                      {branch}
-                    </button>
-                  ))}
+                  {BRANCH_OPTIONS.map((branch) => {
+                    const count = visibleEmployees.filter((emp) => (emp.location || emp.branch) === branch).length;
+                    const isActive = branchFilter === branch;
+                    return (
+                      <button
+                        key={branch}
+                        type="button"
+                        onClick={() => setBranchFilter(branch)}
+                        style={{
+                          ...ui.branchPill,
+                          ...(isActive ? ui.branchPillSelected : {}),
+                        }}
+                      >
+                        <MapPin size={16} />
+                        <span>{branch}</span>
+                        <span style={{ ...ui.branchPillCount, ...(isActive ? ui.branchPillCountActive : {}) }}>
+                          {count}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -10842,8 +10855,8 @@ const ui = {
     alignItems: "center",
   },
   branchPill: {
-    height: 38,
-    padding: "0 16px",
+    height: 40,
+    padding: "0 14px",
     borderRadius: 10,
     border: "1px solid var(--border)",
     background: "var(--surface)",
@@ -10854,6 +10867,24 @@ const ui = {
     transition: "all 0.15s ease",
     display: "inline-flex",
     alignItems: "center",
+    gap: 8,
+  },
+  branchPillCount: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 22,
+    height: 22,
+    padding: "0 6px",
+    borderRadius: 999,
+    background: "var(--surface-muted)",
+    color: "var(--text-soft)",
+    fontSize: 12,
+    fontWeight: 800,
+  },
+  branchPillCountActive: {
+    background: "rgba(255,255,255,0.25)",
+    color: "#fff",
   },
   branchPillActive: {
     background: "var(--accent)",
