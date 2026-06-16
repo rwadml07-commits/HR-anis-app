@@ -5122,6 +5122,7 @@ useEffect(() => {
       chats,
       chatCalls,
       feedbackEntries,
+      attendanceReports: readStorage(STORAGE_KEYS.attendanceReports, [], isArray),
     };
 
     // 1) JSON backup (exact, for restoring).
@@ -5162,6 +5163,9 @@ useEffect(() => {
       addSheet("UpgradeRequests", upgradeRequests);
       addSheet("Complaints", complaints);
       addSheet("Feedback", feedbackEntries);
+      addSheet("Attendance", readStorage(STORAGE_KEYS.attendanceReports, [], isArray));
+      addSheet("Chats", chats);
+      addSheet("ChatCalls", chatCalls);
       XLSX.writeFile(workbook, `anis-hr-backup-${stamp}.xlsx`);
     } catch (e) {
       console.error("Excel backup failed:", e);
@@ -5177,20 +5181,54 @@ useEffect(() => {
       return;
     }
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const data = JSON.parse(String(e.target?.result || "{}"));
         if (!data || typeof data !== "object") throw new Error("bad file");
         // Restore each collection if present in the backup.
-        if (Array.isArray(data.employees)) setEmployees(normalizeEmployeesCollection(data.employees.map((x) => ({ ...x }))));
-        if (Array.isArray(data.requests)) setRequests(data.requests);
-        if (Array.isArray(data.systemUsers)) setSystemUsers(mergeSystemUsersWithHiddenAccounts(data.systemUsers));
-        if (Array.isArray(data.pendingAccounts)) setPendingAccounts(data.pendingAccounts);
-        if (Array.isArray(data.upgradeRequests)) setUpgradeRequests(data.upgradeRequests);
-        if (Array.isArray(data.complaints)) setComplaints(data.complaints);
-        if (Array.isArray(data.chats)) setChats(data.chats);
-        if (Array.isArray(data.chatCalls)) setChatCalls(data.chatCalls);
-        if (Array.isArray(data.feedbackEntries)) setFeedbackEntries(data.feedbackEntries);
+        const restoredEmployees = Array.isArray(data.employees) ? normalizeEmployeesCollection(data.employees.map((x) => ({ ...x }))) : employees;
+        const restoredRequests = Array.isArray(data.requests) ? data.requests : requests;
+        const restoredUsers = Array.isArray(data.systemUsers) ? mergeSystemUsersWithHiddenAccounts(data.systemUsers) : systemUsers;
+        const restoredPending = Array.isArray(data.pendingAccounts) ? data.pendingAccounts : pendingAccounts;
+        const restoredUpgrades = Array.isArray(data.upgradeRequests) ? data.upgradeRequests : upgradeRequests;
+        const restoredComplaints = Array.isArray(data.complaints) ? data.complaints : complaints;
+        const restoredChats = Array.isArray(data.chats) ? data.chats : chats;
+        const restoredChatCalls = Array.isArray(data.chatCalls) ? data.chatCalls : chatCalls;
+        const restoredFeedback = Array.isArray(data.feedbackEntries) ? data.feedbackEntries : feedbackEntries;
+        const restoredAttendance = Array.isArray(data.attendanceReports) ? data.attendanceReports : readStorage(STORAGE_KEYS.attendanceReports, [], isArray);
+
+        setEmployees(restoredEmployees);
+        setRequests(restoredRequests);
+        setSystemUsers(restoredUsers);
+        setPendingAccounts(restoredPending);
+        setUpgradeRequests(restoredUpgrades);
+        setComplaints(restoredComplaints);
+        setChats(restoredChats);
+        setChatCalls(restoredChatCalls);
+        setFeedbackEntries(restoredFeedback);
+        try {
+          localStorage.setItem(STORAGE_KEYS.attendanceReports, JSON.stringify(restoredAttendance));
+        } catch {}
+        setAttendanceReportsVersion((prev) => prev + 1);
+
+        // Push the restored data to the cloud so it persists and syncs.
+        try {
+          await forceRemoteSaveSnapshot({
+            employees: restoredEmployees,
+            requests: restoredRequests,
+            users: restoredUsers,
+            pending: restoredPending,
+            upgrades: restoredUpgrades,
+            complaints: restoredComplaints,
+            chats: restoredChats,
+            chatCalls: restoredChatCalls,
+            feedback: restoredFeedback,
+            attendanceReports: restoredAttendance,
+          });
+        } catch (cloudErr) {
+          console.error("Restore cloud sync failed:", cloudErr);
+        }
+
         setResetSystemMessage(language === "ar" ? "تم استرجاع البيانات من النسخة الاحتياطية بنجاح." : "Data restored from backup successfully.");
       } catch (err) {
         setResetSystemMessage(language === "ar" ? "تعذّر قراءة الملف. تأكد أنه ملف نسخة احتياطية JSON صحيح." : "Could not read the file. Make sure it is a valid JSON backup.");
