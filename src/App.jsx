@@ -1643,11 +1643,13 @@ export default function HRManagementApp() {
   const [leaveReviewDays, setLeaveReviewDays] = useState("");
   const [leaveReviewNote, setLeaveReviewNote] = useState("");
   const [leaveReviewMessage, setLeaveReviewMessage] = useState("");
+  const [leaveReviewSkipBalance, setLeaveReviewSkipBalance] = useState(false);
   // Employee response modal (when the approver modified the day count).
   const [leaveResponseOpen, setLeaveResponseOpen] = useState(false);
   const [leaveResponseRequest, setLeaveResponseRequest] = useState(null);
   const [leaveResponseNote, setLeaveResponseNote] = useState("");
   const [leaveResponseProposedDays, setLeaveResponseProposedDays] = useState("");
+  const [leaveResponseMessage, setLeaveResponseMessage] = useState("");
   const [advanceRequestForm, setAdvanceRequestForm] = useState(emptyAdvanceRequestForm);
   const [rewardRequestForm, setRewardRequestForm] = useState(emptyRewardRequestForm);
   const [upgradeRequestForm, setUpgradeRequestForm] = useState(emptyUpgradeRequestForm);
@@ -6089,10 +6091,11 @@ useEffect(() => {
       leaveFrom: normalizeLeaveDateValue(request.leaveFrom),
       leaveTo: normalizeLeaveDateValue(request.leaveTo || request.leaveFrom),
     });
-    setLeaveReviewRequest({ ...request, requestedDays });
+    setLeaveReviewRequest({ ...request, requestedDays, employeeBalance: Number(employees.find((e) => e.phone === request.employeePhone)?.leaveBalance || 0) });
     setLeaveReviewDays(String(requestedDays || 0));
     setLeaveReviewNote("");
     setLeaveReviewMessage("");
+    setLeaveReviewSkipBalance(false);
     setLeaveReviewOpen(true);
   };
 
@@ -6178,16 +6181,18 @@ useEffect(() => {
         leaveDaysApproved: decision === "reject" ? 0 : approvedDays,
         leaveDaysRequested: requestedDays,
         leaveBalanceApplied: nextStatus === "معتمد",
+        leaveSkipBalance: leaveReviewSkipBalance,
         awaitingEmployee: nextStatus === "بانتظار رد الموظف",
         ...extra,
       };
     });
 
-    // Deduct balance only when fully approved by all three.
-    if (nextStatus === "معتمد" && approvedDays > 0) {
+    // Deduct balance only when fully approved by all three, and only if the
+    // approver did NOT choose to skip the deduction. Balance may go negative.
+    if (nextStatus === "معتمد" && approvedDays > 0 && !leaveReviewSkipBalance) {
       updatedEmployees = employees.map((emp) =>
         emp.phone === leaveReviewRequest.employeePhone
-          ? { ...emp, leaveBalance: Math.max(0, Number(emp.leaveBalance || 0) - approvedDays) }
+          ? { ...emp, leaveBalance: Number(emp.leaveBalance || 0) - approvedDays }
           : emp
       );
     }
@@ -6220,6 +6225,7 @@ useEffect(() => {
     setLeaveResponseRequest(request);
     setLeaveResponseNote("");
     setLeaveResponseProposedDays("");
+    setLeaveResponseMessage("");
     setLeaveResponseOpen(true);
   };
 
@@ -6330,6 +6336,17 @@ useEffect(() => {
             : "There is an overlapping leave request for this employee."
         );
         return;
+      }
+      // Warn (but allow) if the requested days exceed the current balance.
+      const requestedDays = getApprovedLeaveDays({ ...leaveRequestForm, leaveFrom: normalizedFrom, leaveTo: normalizedTo });
+      const currentBalance = Number(employee.leaveBalance || 0);
+      if (requestedDays > currentBalance) {
+        const proceed = window.confirm(
+          language === "ar"
+            ? `تنبيه: رصيد الإجازة غير كافٍ.\nالرصيد الحالي: ${currentBalance} يوم\nعدد الأيام المطلوبة: ${requestedDays} يوم\nلو تم الاعتماد سيصبح الرصيد: ${currentBalance - requestedDays} يوم (بالسالب).\n\nهل تريد المتابعة وإرسال الطلب؟`
+            : `Warning: insufficient leave balance.\nCurrent balance: ${currentBalance}\nRequested: ${requestedDays}\nIf approved the balance becomes: ${currentBalance - requestedDays} (negative).\n\nContinue and submit anyway?`
+        );
+        if (!proceed) return;
       }
     }
 
@@ -9286,6 +9303,25 @@ useEffect(() => {
             <Field label={language === "ar" ? "عدد الأيام المعتمدة (يمكن تعديلها)" : "Approved days (editable)"}>
               <Input type="number" step="0.5" value={leaveReviewDays} onChange={(e) => { setLeaveReviewDays(e.target.value); setLeaveReviewMessage(""); }} />
             </Field>
+            <div style={{ display: "grid", gap: 4, padding: 10, background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
+              <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
+                {language === "ar" ? "رصيد إجازة الموظف الحالي: " : "Current leave balance: "}
+                <strong style={{ color: "var(--text)" }}>{leaveReviewRequest.employeeBalance} {language === "ar" ? "يوم" : "days"}</strong>
+              </div>
+              {!leaveReviewSkipBalance ? (
+                <div style={{ fontSize: 13, color: (leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0)) < 0 ? "#b45309" : "var(--text-soft)", fontWeight: (leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0)) < 0 ? 800 : 400 }}>
+                  {language === "ar" ? "الرصيد بعد الاعتماد: " : "Balance after approval: "}
+                  {leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0)} {language === "ar" ? "يوم" : "days"}
+                  {(leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0)) < 0 ? (language === "ar" ? " (بالسالب)" : " (negative)") : ""}
+                </div>
+              ) : (
+                <div style={{ fontSize: 13, color: "#15803d" }}>{language === "ar" ? "لن تُخصم هذه الإجازة من الرصيد." : "This leave will not be deducted from the balance."}</div>
+              )}
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 4 }}>
+                <input type="checkbox" checked={leaveReviewSkipBalance} onChange={(e) => setLeaveReviewSkipBalance(e.target.checked)} />
+                {language === "ar" ? "هذه الإجازة لا تُخصم من رصيد الموظف" : "Do not deduct this leave from the balance"}
+              </label>
+            </div>
             <Field label={language === "ar" ? "ملاحظة (إجبارية عند الرفض أو التعديل)" : "Note (required for reject/modify)"}>
               <Textarea value={leaveReviewNote} onChange={(e) => setLeaveReviewNote(e.target.value)} rows={2} />
             </Field>
@@ -9312,30 +9348,53 @@ useEffect(() => {
       <Modal open={leaveResponseOpen} title={language === "ar" ? "الرد على تعديل الإجازة" : "Respond to Leave Modification"} onClose={() => setLeaveResponseOpen(false)} maxWidth={520}>
         {leaveResponseRequest && (
           <div style={{ display: "grid", gap: 14 }}>
-            <div style={{ display: "grid", gap: 6, padding: 12, background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
+            <div style={{ display: "grid", gap: 8, padding: 14, background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
               <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
-                {language === "ar" ? `طلبت ${leaveResponseRequest.leaveDaysRequested} يوم` : `You requested ${leaveResponseRequest.leaveDaysRequested} days`}
+                {language === "ar" ? "التاريخ: " : "Date: "}
+                {normalizeLeaveDateValue(leaveResponseRequest.leaveFrom)} → {normalizeLeaveDateValue(leaveResponseRequest.leaveTo || leaveResponseRequest.leaveFrom)}
               </div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: "var(--accent)" }}>
-                {language === "ar" ? `تم اعتماد ${leaveResponseRequest.leaveDaysApproved} يوم` : `Approved: ${leaveResponseRequest.leaveDaysApproved} days`}
+              <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
+                  {language === "ar" ? "طلبت: " : "Requested: "}<strong style={{ color: "var(--text)" }}>{leaveResponseRequest.leaveDaysRequested} {language === "ar" ? "يوم" : "days"}</strong>
+                </div>
+                <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
+                  {language === "ar" ? "اعتُمد: " : "Approved: "}<strong style={{ color: "var(--accent)" }}>{leaveResponseRequest.leaveDaysApproved} {language === "ar" ? "يوم" : "days"}</strong>
+                </div>
               </div>
+              {Number(leaveResponseRequest.leaveDaysRequested) !== Number(leaveResponseRequest.leaveDaysApproved) ? (
+                <div style={{ fontSize: 14, fontWeight: 800, color: "#b45309", background: "#fef3c7", padding: "6px 10px", borderRadius: 6 }}>
+                  {language === "ar"
+                    ? `تم إنقاص ${Number(leaveResponseRequest.leaveDaysRequested) - Number(leaveResponseRequest.leaveDaysApproved)} يوم من طلبك`
+                    : `${Number(leaveResponseRequest.leaveDaysRequested) - Number(leaveResponseRequest.leaveDaysApproved)} day(s) reduced from your request`}
+                </div>
+              ) : null}
               <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
-                {language === "ar" ? "بواسطة: " : "By: "}{leaveResponseRequest.approvedBy || "-"}
+                {language === "ar" ? "اعتمد بواسطة: " : "Approved by: "}<strong style={{ color: "var(--text)" }}>{leaveResponseRequest.approvedBy || "-"}</strong>
               </div>
               {leaveResponseRequest.approverNote ? (
-                <div style={{ fontSize: 13, color: "var(--text-soft)" }}>{language === "ar" ? "ملاحظة المعتمد: " : "Approver note: "}{leaveResponseRequest.approverNote}</div>
+                <div style={{ fontSize: 13, color: "var(--text-soft)", paddingTop: 6, borderTop: "1px solid var(--border)" }}>
+                  {language === "ar" ? "ملاحظة المعتمد: " : "Approver note: "}<span style={{ color: "var(--text)" }}>{leaveResponseRequest.approverNote}</span>
+                </div>
               ) : null}
             </div>
-            <Field label={language === "ar" ? "ملاحظة / عدد أيام مقترح (عند اقتراح تعديل)" : "Note / proposed days"}>
-              <Textarea value={leaveResponseNote} onChange={(e) => setLeaveResponseNote(e.target.value)} rows={2} />
+
+            <Field label={language === "ar" ? "ملاحظة / سبب (إجباري عند الرفض)" : "Note / reason (required to reject)"}>
+              <Textarea value={leaveResponseNote} onChange={(e) => { setLeaveResponseNote(e.target.value); setLeaveResponseMessage(""); }} rows={2} />
             </Field>
-            <Field label={language === "ar" ? "اقتراح عدد أيام آخر (اختياري)" : "Propose other day count (optional)"}>
-              <Input type="number" step="0.5" value={leaveResponseProposedDays} onChange={(e) => setLeaveResponseProposedDays(e.target.value)} />
+            <Field label={language === "ar" ? "طلب مراجعة: اقتراح عدد أيام آخر (اختياري)" : "Request review: propose other day count (optional)"}>
+              <Input type="number" step="0.5" value={leaveResponseProposedDays} onChange={(e) => setLeaveResponseProposedDays(e.target.value)} placeholder={language === "ar" ? "مثال: 5" : "e.g. 5"} />
             </Field>
+            {leaveResponseMessage ? <p style={ui.errorText}>{leaveResponseMessage}</p> : null}
             <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
-              <Button variant="outline" onClick={() => submitLeaveResponse("reject")} style={{ color: "#b91c1c", borderColor: "#fecaca" }}>{language === "ar" ? "رفض" : "Reject"}</Button>
+              <Button variant="outline" onClick={() => {
+                if (!String(leaveResponseNote || "").trim()) {
+                  setLeaveResponseMessage(language === "ar" ? "يجب كتابة سبب الرفض." : "A reason is required to reject.");
+                  return;
+                }
+                submitLeaveResponse("reject");
+              }} style={{ color: "#b91c1c", borderColor: "#fecaca" }}>{language === "ar" ? "رفض" : "Reject"}</Button>
               {leaveResponseProposedDays ? (
-                <Button variant="outline" onClick={() => submitLeaveResponse("propose", Number(leaveResponseProposedDays))}>{language === "ar" ? "اقتراح تعديل" : "Propose"}</Button>
+                <Button variant="outline" onClick={() => submitLeaveResponse("propose", Number(leaveResponseProposedDays))}>{language === "ar" ? "طلب مراجعة" : "Request review"}</Button>
               ) : null}
               <Button onClick={() => submitLeaveResponse("accept")}>{language === "ar" ? "قبول" : "Accept"}</Button>
             </div>
