@@ -9370,63 +9370,6 @@ useEffect(() => {
         </div>
       </Modal>
 
-      <Modal open={leaveReviewOpen} title={t.leaveReviewTitle} onClose={() => setLeaveReviewOpen(false)} maxWidth={520}>
-        {leaveReviewRequest && (
-          <div style={{ display: "grid", gap: 14 }}>
-            <div style={{ background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, fontSize: 14, lineHeight: 1.9 }}>
-              <div><strong>{leaveReviewRequest.employeeName}</strong></div>
-              <div style={{ color: "var(--text-soft)" }}>
-                {normalizeLeaveDateValue(leaveReviewRequest.leaveFrom)} → {normalizeLeaveDateValue(leaveReviewRequest.leaveTo || leaveReviewRequest.leaveFrom)}
-              </div>
-              {leaveReviewRequest.reason ? <div style={{ color: "var(--text-soft)" }}>{leaveReviewRequest.reason}</div> : null}
-            </div>
-            <Field label={t.leaveRequestedDays}>
-              <Input value={String(leaveReviewRequest.requestedDays || 0)} disabled style={{ opacity: 0.7 }} />
-            </Field>
-            <Field label={t.leaveApprovedDays}>
-              <Input type="number" step="0.5" value={leaveReviewDays} onChange={(e) => { setLeaveReviewDays(e.target.value); setLeaveReviewMessage(""); }} />
-            </Field>
-            <Field label={t.leaveReviewNote}>
-              <Textarea value={leaveReviewNote} onChange={(e) => { setLeaveReviewNote(e.target.value); setLeaveReviewMessage(""); }} rows={2} />
-            </Field>
-            {leaveReviewMessage ? <p style={ui.errorText}>{leaveReviewMessage}</p> : null}
-            <div style={{ display: "grid", gap: 8 }}>
-              <Button onClick={() => submitLeaveReview("approve")}>{t.leaveApproveAsIs}</Button>
-              <Button variant="outline" onClick={() => submitLeaveReview("modify")}>{t.leaveModifyDays}</Button>
-              <Button variant="danger" onClick={() => submitLeaveReview("reject")}>{t.leaveRejectRequest}</Button>
-            </div>
-          </div>
-        )}
-      </Modal>
-
-      <Modal open={leaveResponseOpen} title={t.leaveResponseTitle} onClose={() => setLeaveResponseOpen(false)} maxWidth={480}>
-        {leaveResponseRequest && (
-          <div style={{ display: "grid", gap: 14 }}>
-            <div style={{ background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, fontSize: 14, lineHeight: 1.9 }}>
-              <div>{t.leaveResponseInfo}</div>
-              <div style={{ marginTop: 6 }}>
-                <span style={{ color: "var(--text-soft)" }}>{t.leaveRequestedDays}: </span>
-                <strong>{leaveResponseRequest.leaveDaysRequested || "-"}</strong>
-                {"  →  "}
-                <span style={{ color: "var(--text-soft)" }}>{t.leaveApprovedDays}: </span>
-                <strong style={{ color: "var(--accent)" }}>{leaveResponseRequest.leaveDaysApproved}</strong>
-              </div>
-              {leaveResponseRequest.approverNote ? (
-                <div style={{ marginTop: 6, color: "var(--text-soft)" }}>{t.leaveReviewNote}: {leaveResponseRequest.approverNote}</div>
-              ) : null}
-            </div>
-            <Field label={t.leaveReviewNote}>
-              <Textarea value={leaveResponseNote} onChange={(e) => setLeaveResponseNote(e.target.value)} rows={2} />
-            </Field>
-            <div style={{ display: "grid", gap: 8 }}>
-              <Button onClick={() => submitLeaveResponse("accept")}>{t.leaveAccept}</Button>
-              <Button variant="outline" onClick={() => { const d = window.prompt(t.leaveProposedDays, String(leaveResponseRequest.leaveDaysApproved || 0)); if (d != null) submitLeaveResponse("propose", Number(d)); }}>{t.leaveProposeAgain}</Button>
-              <Button variant="danger" onClick={() => submitLeaveResponse("reject")}>{t.leaveRejectByEmployee}</Button>
-            </div>
-          </div>
-        )}
-      </Modal>
-
       <Modal open={passwordDialogOpen} title={t.changePassword} onClose={() => setPasswordDialogOpen(false)} maxWidth={520}>
         {!authUser?.mustChangePassword && (
           <Field label={t.currentPassword}>
