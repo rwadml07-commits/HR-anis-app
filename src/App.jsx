@@ -1777,6 +1777,14 @@ export default function HRManagementApp() {
 
   const forceRemoteSaveSnapshot = async (snapshotOverride = null) => {
     if (!cloudEnabled || applyingRemoteRef.current) return;
+    // CRITICAL: never push to the cloud before the first successful load.
+    // Otherwise a save triggered right after deploy (before the cloud data has
+    // loaded) would overwrite real cloud data with the code's default data —
+    // wiping passwords, added people, etc.
+    if (!remoteReadyRef.current) {
+      console.warn("Skipped cloud save: remote not ready yet (protecting cloud data).");
+      return;
+    }
     const snapshot = sanitizeRemoteState(snapshotOverride || buildCurrentRemoteSnapshot());
     try {
       setCloudStatus("syncing");
@@ -2219,6 +2227,13 @@ useEffect(() => {
       console.error("Cloud sync init failed:", error);
       remoteReadyRef.current = false;
       setCloudStatus("error");
+      // Retry the initial load until it succeeds, so we never get stuck in a
+      // state where remote is "not ready" (which blocks all saves).
+      if (!cancelled) {
+        window.setTimeout(() => {
+          if (!cancelled && !remoteReadyRef.current) loadRemoteState();
+        }, 3000);
+      }
     }
   };
 
