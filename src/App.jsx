@@ -745,6 +745,22 @@ const translations = {
     completeEmployee: "استكمال بيانات الموظف",
     completeSave: "حفظ واستكمال البيانات",
     approve: "اعتماد",
+    leaveReviewTitle: "مراجعة طلب الإجازة",
+    leaveRequestedDays: "عدد الأيام المطلوبة",
+    leaveApprovedDays: "عدد الأيام المعتمدة",
+    leaveReviewNote: "ملاحظة",
+    leaveReviewNoteReject: "سبب الرفض (إلزامي)",
+    leaveApproveAsIs: "اعتماد كما هو",
+    leaveModifyDays: "تعديل الأيام وإرسال للموظف",
+    leaveRejectRequest: "رفض الطلب",
+    leaveResponseTitle: "الرد على تعديل الإجازة",
+    leaveResponseInfo: "عدّل المعتمِد عدد أيام إجازتك. اختر ردك:",
+    leaveAccept: "قبول",
+    leaveRejectByEmployee: "رفض",
+    leaveProposeAgain: "اقتراح تعديل آخر",
+    leaveAwaitingEmployee: "بانتظار رد الموظف",
+    leaveProposedDays: "عدد الأيام المقترح",
+    confirmAction: "تأكيد",
     reject: "رفض",
     editData: "تعديل البيانات",
     editEmployee: "تعديل الموظف",
@@ -915,6 +931,22 @@ const translations = {
     completeEmployee: "Complete Employee Data",
     completeSave: "Save Completed Data",
     approve: "Approve",
+    leaveReviewTitle: "Review Leave Request",
+    leaveRequestedDays: "Requested Days",
+    leaveApprovedDays: "Approved Days",
+    leaveReviewNote: "Note",
+    leaveReviewNoteReject: "Rejection reason (required)",
+    leaveApproveAsIs: "Approve as is",
+    leaveModifyDays: "Modify days & send to employee",
+    leaveRejectRequest: "Reject request",
+    leaveResponseTitle: "Respond to Modified Leave",
+    leaveResponseInfo: "The approver modified your leave days. Choose your response:",
+    leaveAccept: "Accept",
+    leaveRejectByEmployee: "Reject",
+    leaveProposeAgain: "Propose another change",
+    leaveAwaitingEmployee: "Awaiting employee response",
+    leaveProposedDays: "Proposed days",
+    confirmAction: "Confirm",
     reject: "Reject",
     editData: "Edit Data",
     editEmployee: "Edit Employee",
@@ -1604,6 +1636,18 @@ export default function HRManagementApp() {
   const [voicePlaybackId, setVoicePlaybackId] = useState(null);
 
   const [leaveRequestForm, setLeaveRequestForm] = useState(emptyLeaveRequestForm);
+  // Leave review (approver) modal: shows requested days, allows editing the
+  // approved day count, and a required note when rejecting/modifying.
+  const [leaveReviewOpen, setLeaveReviewOpen] = useState(false);
+  const [leaveReviewRequest, setLeaveReviewRequest] = useState(null);
+  const [leaveReviewDays, setLeaveReviewDays] = useState("");
+  const [leaveReviewNote, setLeaveReviewNote] = useState("");
+  const [leaveReviewMessage, setLeaveReviewMessage] = useState("");
+  // Employee response modal (when the approver modified the day count).
+  const [leaveResponseOpen, setLeaveResponseOpen] = useState(false);
+  const [leaveResponseRequest, setLeaveResponseRequest] = useState(null);
+  const [leaveResponseNote, setLeaveResponseNote] = useState("");
+  const [leaveResponseProposedDays, setLeaveResponseProposedDays] = useState("");
   const [advanceRequestForm, setAdvanceRequestForm] = useState(emptyAdvanceRequestForm);
   const [rewardRequestForm, setRewardRequestForm] = useState(emptyRewardRequestForm);
   const [upgradeRequestForm, setUpgradeRequestForm] = useState(emptyUpgradeRequestForm);
@@ -5984,6 +6028,231 @@ useEffect(() => {
     });
   };
 
+  // Open the approver review modal for a leave request.
+  const openLeaveReview = (request) => {
+    if (!request) return;
+    const requestedDays = getApprovedLeaveDays({
+      ...request,
+      leaveFrom: normalizeLeaveDateValue(request.leaveFrom),
+      leaveTo: normalizeLeaveDateValue(request.leaveTo || request.leaveFrom),
+    });
+    setLeaveReviewRequest({ ...request, requestedDays });
+    setLeaveReviewDays(String(requestedDays || 0));
+    setLeaveReviewNote("");
+    setLeaveReviewMessage("");
+    setLeaveReviewOpen(true);
+  };
+
+  // Approver decision: "approve" (as-is), "modify" (changed days -> back to
+  // employee), or "reject" (requires a note).
+  // Collective approval: leave requires all three approver roles
+  // (department_manager, hr, owner) to approve. Any rejection rejects the
+  // request. A day-count change sends it back to the employee.
+  const LEAVE_APPROVER_ROLES = ["department_manager", "hr", "owner"];
+  const leaveApproverRoleLabel = (role) => {
+    if (role === "owner") return language === "ar" ? "المالك" : "Owner";
+    if (role === "hr") return "HR";
+    if (role === "department_manager") return language === "ar" ? "مدير الإدارة" : "Dept. Manager";
+    return role;
+  };
+
+  const submitLeaveReview = async (decision) => {
+    if (!authUser || !leaveReviewRequest) return;
+    const requestedDays = Number(leaveReviewRequest.requestedDays || 0);
+    const approvedDays = Number(leaveReviewDays || 0);
+    const note = String(leaveReviewNote || "").trim();
+
+    // Which approver role is acting now.
+    const myRole = effectiveRole;
+    if (!LEAVE_APPROVER_ROLES.includes(myRole)) {
+      setLeaveReviewMessage(language === "ar" ? "ليس لديك صلاحية اعتماد الإجازات." : "You are not allowed to approve leave.");
+      return;
+    }
+
+    if (decision === "reject" && !note) {
+      setLeaveReviewMessage(language === "ar" ? "يجب كتابة سبب الرفض." : "A reason is required to reject.");
+      return;
+    }
+    if (decision !== "reject" && (approvedDays <= 0 || isNaN(approvedDays))) {
+      setLeaveReviewMessage(language === "ar" ? "عدد الأيام يجب أن يكون أكبر من صفر." : "Approved days must be greater than zero.");
+      return;
+    }
+
+    const isModified = decision !== "reject" && approvedDays !== requestedDays;
+
+    // Build the updated approvals map for this request.
+    const prevApprovals = leaveReviewRequest.approvals || {};
+    const nextApprovals = { ...prevApprovals };
+
+    let nextStatus;
+    let extra = {};
+
+    if (decision === "reject") {
+      // One rejection rejects the whole request.
+      nextApprovals[myRole] = { decision: "reject", by: authUser.name, note, at: new Date().toISOString() };
+      nextStatus = "مرفوض";
+    } else if (isModified) {
+      // A day-count change resets approvals and goes back to the employee.
+      nextStatus = "بانتظار رد الموظف";
+      extra = { awaitingEmployee: true };
+    } else {
+      // Approve as-is: record this role's approval, then check if all three are in.
+      nextApprovals[myRole] = { decision: "approve", by: authUser.name, note, at: new Date().toISOString() };
+      const allApproved = LEAVE_APPROVER_ROLES.every(
+        (role) => nextApprovals[role] && nextApprovals[role].decision === "approve"
+      );
+      nextStatus = allApproved ? "معتمد" : "بانتظار الاعتماد";
+    }
+
+    const approverNames = LEAVE_APPROVER_ROLES
+      .filter((role) => nextApprovals[role]?.decision === "approve")
+      .map((role) => nextApprovals[role].by);
+
+    let updatedEmployees = employees;
+    const updatedRequests = requests.map((r) => {
+      if (r.id !== leaveReviewRequest.id) return r;
+      return {
+        ...r,
+        status: nextStatus,
+        approvals: isModified ? {} : nextApprovals, // reset on modify
+        decidedBy: approverNames.join("، ") || authUser.name,
+        approvedBy: approverNames.join("، ") || authUser.name,
+        approverRole: authUser.role,
+        canDecide: nextStatus === "بانتظار الاعتماد", // still open for remaining approvers
+        decidedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        approverNote: note || r.approverNote || "",
+        leaveDaysApproved: decision === "reject" ? 0 : approvedDays,
+        leaveDaysRequested: requestedDays,
+        leaveBalanceApplied: nextStatus === "معتمد",
+        awaitingEmployee: nextStatus === "بانتظار رد الموظف",
+        ...extra,
+      };
+    });
+
+    // Deduct balance only when fully approved by all three.
+    if (nextStatus === "معتمد" && approvedDays > 0) {
+      updatedEmployees = employees.map((emp) =>
+        emp.phone === leaveReviewRequest.employeePhone
+          ? { ...emp, leaveBalance: Math.max(0, Number(emp.leaveBalance || 0) - approvedDays) }
+          : emp
+      );
+    }
+
+    setRequests(updatedRequests);
+    if (updatedEmployees !== employees) setEmployees(updatedEmployees);
+    setLeaveReviewOpen(false);
+    setLeaveReviewRequest(null);
+
+    try {
+      await forceRemoteSaveSnapshot({
+        employees: updatedEmployees,
+        requests: updatedRequests,
+        users: systemUsers,
+        pending: pendingAccounts,
+        upgrades: upgradeRequests,
+        complaints,
+        chats,
+        chatCalls,
+        feedback: feedbackEntries,
+      });
+    } catch (e) {
+      console.error("Leave review cloud sync failed:", e);
+    }
+  };
+
+  // Open the employee response modal (after approver modified the days).
+  const openLeaveResponse = (request) => {
+    if (!request) return;
+    setLeaveResponseRequest(request);
+    setLeaveResponseNote("");
+    setLeaveResponseProposedDays("");
+    setLeaveResponseOpen(true);
+  };
+
+  // Employee responds to a modified leave: "accept", "reject", or "propose"
+  // (suggest another day count -> back to the approver).
+  const submitLeaveResponse = async (action, proposedDays) => {
+    if (!authUser || !leaveResponseRequest) return;
+    const note = String(leaveResponseNote || "").trim();
+
+    let nextStatus;
+    let extra = {};
+    if (action === "accept") {
+      // Employee accepted the modified day count. Restart the collective
+      // approval cycle with the new requested day count.
+      nextStatus = "بانتظار الاعتماد";
+      extra = {
+        canDecide: true,
+        awaitingEmployee: false,
+        approvals: {},
+        leaveDaysRequested: Number(leaveResponseRequest.leaveDaysApproved || 0),
+        leaveBalanceApplied: false,
+      };
+    } else if (action === "reject") {
+      nextStatus = "مرفوض";
+    } else {
+      // propose: send back to approvers with a new requested day count
+      nextStatus = "بانتظار الاعتماد";
+      extra = {
+        canDecide: true,
+        awaitingEmployee: false,
+        approvals: {},
+        leaveDaysRequested: Number(proposedDays || leaveResponseRequest.leaveDaysApproved || 0),
+        employeeNote: note,
+      };
+    }
+
+    let updatedEmployees = employees;
+    const updatedRequests = requests.map((r) => {
+      if (r.id !== leaveResponseRequest.id) return r;
+      return {
+        ...r,
+        status: nextStatus,
+        awaitingEmployee: false,
+        employeeRespondedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        employeeNote: note || r.employeeNote || "",
+        leaveBalanceApplied: nextStatus === "معتمد",
+        ...extra,
+      };
+    });
+
+    // Balance is deducted only when all three approvers approve (in
+    // submitLeaveReview), not here — accepting restarts the approval cycle.
+    if (nextStatus === "معتمد") {
+      const days = Number(leaveResponseRequest.leaveDaysApproved || 0);
+      if (days > 0) {
+        updatedEmployees = employees.map((emp) =>
+          emp.phone === leaveResponseRequest.employeePhone
+            ? { ...emp, leaveBalance: Math.max(0, Number(emp.leaveBalance || 0) - days) }
+            : emp
+        );
+      }
+    }
+
+    setRequests(updatedRequests);
+    if (updatedEmployees !== employees) setEmployees(updatedEmployees);
+    setLeaveResponseOpen(false);
+    setLeaveResponseRequest(null);
+
+    try {
+      await forceRemoteSaveSnapshot({
+        employees: updatedEmployees,
+        requests: updatedRequests,
+        users: systemUsers,
+        pending: pendingAccounts,
+        upgrades: upgradeRequests,
+        complaints,
+        chats,
+        chatCalls,
+        feedback: feedbackEntries,
+      });
+    } catch (e) {
+      console.error("Leave response cloud sync failed:", e);
+    }
+  };
+
   const submitLeaveRequest = async () => {
     const employee = getFinancialRowEmployee() || getCurrentEmployee();
     if (!employee || !leaveRequestForm.reason) return;
@@ -7280,10 +7549,13 @@ useEffect(() => {
                     title={req.employeeName}
                     action={requestHubHasApprovalActions && req.canDecide ? (
                       <div style={ui.rowActions}>
-                        <Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button>
-                        <Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button>
+                        <Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{t.approve}</Button>
                       </div>
-                    ) : null}
+                    ) : (req.awaitingEmployee && req.employeePhone === authUser?.phone ? (
+                      <div style={ui.rowActions}>
+                        <Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{t.confirmAction}</Button>
+                      </div>
+                    ) : null)}
                   >
                     <MobileFieldRow label={t.type} value={req.type} />
                     <MobileFieldRow label={t.dateTime} value={req.type === "إجازة" ? `${req.leaveFrom || "-"} → ${req.leaveTo || "-"}` : `${req.lateFrom || "-"} → ${req.lateTo || "-"}${req.compensateAt ? ` | ${t.compensateAt}: ${req.compensateAt}` : ""}`} />
@@ -7306,7 +7578,7 @@ useEffect(() => {
                         <td style={ui.td}>{req.reason}</td>
                         <td style={ui.td}>{req.status}</td>
                         <td style={ui.td}>{req.decidedBy || "-"}</td>
-                        <td style={ui.td}>{requestHubHasApprovalActions && req.canDecide ? <div style={ui.rowActions}><Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button><Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button></div> : <span style={{ color: "#64748b" }}>{req.status}</span>}</td>
+                        <td style={ui.td}>{requestHubHasApprovalActions && req.canDecide ? <div style={ui.rowActions}><Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{t.approve}</Button></div> : (req.awaitingEmployee && req.employeePhone === authUser?.phone ? <div style={ui.rowActions}><Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{t.confirmAction}</Button></div> : <span style={{ color: "#64748b" }}>{req.status}</span>)}</td>
                       </tr>
                     )) : <tr><td style={ui.emptyCell} colSpan={7}>{t.noRequests}</td></tr>}
                   </tbody>
@@ -7339,10 +7611,18 @@ useEffect(() => {
                     title={req.employeeName}
                     action={requestHubHasApprovalActions && req.canDecide ? (
                       <div style={ui.rowActions}>
-                        <Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button>
-                        <Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button>
+                        {req.type === "إجازة" ? (
+                          <Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{language === "ar" ? "مراجعة" : "Review"}</Button>
+                        ) : (
+                          <>
+                            <Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button>
+                            <Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button>
+                          </>
+                        )}
                       </div>
-                    ) : null}
+                    ) : (req.awaitingEmployee && authUser?.phone === req.employeePhone ? (
+                      <Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{language === "ar" ? "الرد على التعديل" : "Respond"}</Button>
+                    ) : null)}
                   >
                     <MobileFieldRow label={t.type} value={req.type} />
                     <MobileFieldRow label={t.amount} value={currency(req.resolvedAmount || req.amount)} />
@@ -7365,7 +7645,7 @@ useEffect(() => {
                         <td style={ui.td}>{req.reason}</td>
                         <td style={ui.td}>{req.status}</td>
                         <td style={ui.td}>{req.decidedBy || "-"}</td>
-                        <td style={ui.td}>{requestHubHasApprovalActions && req.canDecide ? <div style={ui.rowActions}><Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button><Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button></div> : <span style={{ color: "#64748b" }}>{req.status}</span>}</td>
+                        <td style={ui.td}>{requestHubHasApprovalActions && req.canDecide ? <div style={ui.rowActions}>{req.type === "إجازة" ? <Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{language === "ar" ? "مراجعة" : "Review"}</Button> : <><Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button><Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button></>}</div> : (req.awaitingEmployee && authUser?.phone === req.employeePhone ? <Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{language === "ar" ? "الرد على التعديل" : "Respond"}</Button> : <span style={{ color: "#64748b" }}>{req.status}</span>)}</td>
                       </tr>
                     )) : <tr><td style={ui.emptyCell} colSpan={7}>{t.noRequests}</td></tr>}
                   </tbody>
@@ -8928,6 +9208,88 @@ useEffect(() => {
         </div>
       </Modal>
 
+      <Modal open={leaveReviewOpen} title={language === "ar" ? "مراجعة طلب الإجازة" : "Review Leave Request"} onClose={() => setLeaveReviewOpen(false)} maxWidth={520}>
+        {leaveReviewRequest && (
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{ display: "grid", gap: 6, padding: 12, background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
+              <div><strong>{leaveReviewRequest.employeeName}</strong></div>
+              <div style={{ fontSize: 13, color: "var(--text-soft)" }}>{language === "ar" ? "السبب: " : "Reason: "}{leaveReviewRequest.reason || "-"}</div>
+              <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
+                {language === "ar" ? "من " : "From "}{normalizeLeaveDateValue(leaveReviewRequest.leaveFrom)} {language === "ar" ? "إلى " : "to "}{normalizeLeaveDateValue(leaveReviewRequest.leaveTo || leaveReviewRequest.leaveFrom)}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "var(--accent)" }}>
+                {language === "ar" ? `عدد الأيام المطلوبة: ${leaveReviewRequest.requestedDays}` : `Requested days: ${leaveReviewRequest.requestedDays}`}
+              </div>
+              <div style={{ display: "grid", gap: 4, marginTop: 6, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-soft)" }}>{language === "ar" ? "حالة الموافقات (يلزم الثلاثة):" : "Approvals (all three required):"}</div>
+                {["department_manager", "hr", "owner"].map((role) => {
+                  const ap = leaveReviewRequest.approvals?.[role];
+                  const label = role === "owner" ? (language === "ar" ? "المالك" : "Owner") : role === "hr" ? "HR" : (language === "ar" ? "مدير الإدارة" : "Dept. Manager");
+                  const mark = ap?.decision === "approve" ? "✅" : ap?.decision === "reject" ? "❌" : "⏳";
+                  return <div key={role} style={{ fontSize: 13, color: "var(--text-soft)" }}>{mark} {label}{ap?.by ? ` — ${ap.by}` : ""}</div>;
+                })}
+              </div>
+            </div>
+            <Field label={language === "ar" ? "عدد الأيام المعتمدة (يمكن تعديلها)" : "Approved days (editable)"}>
+              <Input type="number" step="0.5" value={leaveReviewDays} onChange={(e) => { setLeaveReviewDays(e.target.value); setLeaveReviewMessage(""); }} />
+            </Field>
+            <Field label={language === "ar" ? "ملاحظة (إجبارية عند الرفض أو التعديل)" : "Note (required for reject/modify)"}>
+              <Textarea value={leaveReviewNote} onChange={(e) => setLeaveReviewNote(e.target.value)} rows={2} />
+            </Field>
+            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
+              {language === "ar" ? "إذا غيّرت عدد الأيام، يرجع الطلب للموظف للموافقة. إذا وافقت بنفس العدد، يُعتمد مباشرة." : "Changing the day count sends it back to the employee. Approving the same count finalizes it."}
+            </p>
+            {leaveReviewMessage ? <p style={ui.errorText}>{leaveReviewMessage}</p> : null}
+            {leaveReviewRequest.approvals?.[effectiveRole]?.decision === "approve" ? (
+              <p style={{ fontSize: 13, color: "#15803d", margin: 0 }}>{language === "ar" ? "لقد وافقت على هذا الطلب بالفعل، بانتظار باقي المعتمدين." : "You already approved. Waiting for the others."}</p>
+            ) : null}
+            <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
+              <Button variant="outline" onClick={() => submitLeaveReview("reject")} style={{ color: "#b91c1c", borderColor: "#fecaca" }}>{language === "ar" ? "رفض" : "Reject"}</Button>
+              <Button
+                onClick={() => submitLeaveReview(Number(leaveReviewDays) !== Number(leaveReviewRequest.requestedDays) ? "modify" : "approve")}
+                disabled={leaveReviewRequest.approvals?.[effectiveRole]?.decision === "approve" && Number(leaveReviewDays) === Number(leaveReviewRequest.requestedDays)}
+              >
+                {Number(leaveReviewDays) !== Number(leaveReviewRequest.requestedDays) ? (language === "ar" ? "تأكيد التعديل" : "Confirm change") : (language === "ar" ? "موافقة" : "Approve")}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={leaveResponseOpen} title={language === "ar" ? "الرد على تعديل الإجازة" : "Respond to Leave Modification"} onClose={() => setLeaveResponseOpen(false)} maxWidth={520}>
+        {leaveResponseRequest && (
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{ display: "grid", gap: 6, padding: 12, background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
+              <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
+                {language === "ar" ? `طلبت ${leaveResponseRequest.leaveDaysRequested} يوم` : `You requested ${leaveResponseRequest.leaveDaysRequested} days`}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: "var(--accent)" }}>
+                {language === "ar" ? `تم اعتماد ${leaveResponseRequest.leaveDaysApproved} يوم` : `Approved: ${leaveResponseRequest.leaveDaysApproved} days`}
+              </div>
+              <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
+                {language === "ar" ? "بواسطة: " : "By: "}{leaveResponseRequest.approvedBy || "-"}
+              </div>
+              {leaveResponseRequest.approverNote ? (
+                <div style={{ fontSize: 13, color: "var(--text-soft)" }}>{language === "ar" ? "ملاحظة المعتمد: " : "Approver note: "}{leaveResponseRequest.approverNote}</div>
+              ) : null}
+            </div>
+            <Field label={language === "ar" ? "ملاحظة / عدد أيام مقترح (عند اقتراح تعديل)" : "Note / proposed days"}>
+              <Textarea value={leaveResponseNote} onChange={(e) => setLeaveResponseNote(e.target.value)} rows={2} />
+            </Field>
+            <Field label={language === "ar" ? "اقتراح عدد أيام آخر (اختياري)" : "Propose other day count (optional)"}>
+              <Input type="number" step="0.5" value={leaveResponseProposedDays} onChange={(e) => setLeaveResponseProposedDays(e.target.value)} />
+            </Field>
+            <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
+              <Button variant="outline" onClick={() => submitLeaveResponse("reject")} style={{ color: "#b91c1c", borderColor: "#fecaca" }}>{language === "ar" ? "رفض" : "Reject"}</Button>
+              {leaveResponseProposedDays ? (
+                <Button variant="outline" onClick={() => submitLeaveResponse("propose", Number(leaveResponseProposedDays))}>{language === "ar" ? "اقتراح تعديل" : "Propose"}</Button>
+              ) : null}
+              <Button onClick={() => submitLeaveResponse("accept")}>{language === "ar" ? "قبول" : "Accept"}</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
       <Modal open={clearDataDialogOpen} title={language === "ar" ? "تأكيد مسح بيانات الموظفين" : "Confirm clear employees data"} onClose={() => setClearDataDialogOpen(false)} maxWidth={520}>
         <div style={{ display: "grid", gap: 14 }}>
           <div style={{ border: "1px solid #fecaca", background: "#fef2f2", borderRadius: 8, padding: 14, color: "#7f1d1d", fontSize: 14, lineHeight: 1.8 }}>
@@ -8953,6 +9315,63 @@ useEffect(() => {
             </Button>
           </div>
         </div>
+      </Modal>
+
+      <Modal open={leaveReviewOpen} title={t.leaveReviewTitle} onClose={() => setLeaveReviewOpen(false)} maxWidth={520}>
+        {leaveReviewRequest && (
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{ background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, fontSize: 14, lineHeight: 1.9 }}>
+              <div><strong>{leaveReviewRequest.employeeName}</strong></div>
+              <div style={{ color: "var(--text-soft)" }}>
+                {normalizeLeaveDateValue(leaveReviewRequest.leaveFrom)} → {normalizeLeaveDateValue(leaveReviewRequest.leaveTo || leaveReviewRequest.leaveFrom)}
+              </div>
+              {leaveReviewRequest.reason ? <div style={{ color: "var(--text-soft)" }}>{leaveReviewRequest.reason}</div> : null}
+            </div>
+            <Field label={t.leaveRequestedDays}>
+              <Input value={String(leaveReviewRequest.requestedDays || 0)} disabled style={{ opacity: 0.7 }} />
+            </Field>
+            <Field label={t.leaveApprovedDays}>
+              <Input type="number" step="0.5" value={leaveReviewDays} onChange={(e) => { setLeaveReviewDays(e.target.value); setLeaveReviewMessage(""); }} />
+            </Field>
+            <Field label={t.leaveReviewNote}>
+              <Textarea value={leaveReviewNote} onChange={(e) => { setLeaveReviewNote(e.target.value); setLeaveReviewMessage(""); }} rows={2} />
+            </Field>
+            {leaveReviewMessage ? <p style={ui.errorText}>{leaveReviewMessage}</p> : null}
+            <div style={{ display: "grid", gap: 8 }}>
+              <Button onClick={() => submitLeaveReview("approve")}>{t.leaveApproveAsIs}</Button>
+              <Button variant="outline" onClick={() => submitLeaveReview("modify")}>{t.leaveModifyDays}</Button>
+              <Button variant="danger" onClick={() => submitLeaveReview("reject")}>{t.leaveRejectRequest}</Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={leaveResponseOpen} title={t.leaveResponseTitle} onClose={() => setLeaveResponseOpen(false)} maxWidth={480}>
+        {leaveResponseRequest && (
+          <div style={{ display: "grid", gap: 14 }}>
+            <div style={{ background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8, padding: 12, fontSize: 14, lineHeight: 1.9 }}>
+              <div>{t.leaveResponseInfo}</div>
+              <div style={{ marginTop: 6 }}>
+                <span style={{ color: "var(--text-soft)" }}>{t.leaveRequestedDays}: </span>
+                <strong>{leaveResponseRequest.leaveDaysRequested || "-"}</strong>
+                {"  →  "}
+                <span style={{ color: "var(--text-soft)" }}>{t.leaveApprovedDays}: </span>
+                <strong style={{ color: "var(--accent)" }}>{leaveResponseRequest.leaveDaysApproved}</strong>
+              </div>
+              {leaveResponseRequest.approverNote ? (
+                <div style={{ marginTop: 6, color: "var(--text-soft)" }}>{t.leaveReviewNote}: {leaveResponseRequest.approverNote}</div>
+              ) : null}
+            </div>
+            <Field label={t.leaveReviewNote}>
+              <Textarea value={leaveResponseNote} onChange={(e) => setLeaveResponseNote(e.target.value)} rows={2} />
+            </Field>
+            <div style={{ display: "grid", gap: 8 }}>
+              <Button onClick={() => submitLeaveResponse("accept")}>{t.leaveAccept}</Button>
+              <Button variant="outline" onClick={() => { const d = window.prompt(t.leaveProposedDays, String(leaveResponseRequest.leaveDaysApproved || 0)); if (d != null) submitLeaveResponse("propose", Number(d)); }}>{t.leaveProposeAgain}</Button>
+              <Button variant="danger" onClick={() => submitLeaveResponse("reject")}>{t.leaveRejectByEmployee}</Button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       <Modal open={passwordDialogOpen} title={t.changePassword} onClose={() => setPasswordDialogOpen(false)} maxWidth={520}>
