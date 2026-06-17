@@ -342,6 +342,7 @@ function mergeSystemUsersWithHiddenAccounts(list) {
 
 const emptyForm = {
   name: "",
+  nameEn: "",
   fingerprintId: "",
   department: "",
   password: "",
@@ -1513,6 +1514,7 @@ export default function HRManagementApp() {
 
   const cloudEnabled = isRemoteSyncEnabled();
   const [cloudStatus, setCloudStatus] = useState(cloudEnabled ? "connecting" : "local");
+  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine !== false : true);
   const remoteReadyRef = useRef(!cloudEnabled);
   const applyingRemoteRef = useRef(false);
   const syncTimeoutRef = useRef(null);
@@ -2383,8 +2385,9 @@ useEffect(() => {
 }, [employees, requests, systemUsers, pendingAccounts, upgradeRequests, complaints, chats, chatCalls, feedbackEntries]);
 
 useEffect(() => {
-  if (!cloudEnabled) return undefined;
   const handleOnline = () => {
+    setIsOnline(true);
+    if (!cloudEnabled) return;
     // Connection returned: PULL the latest cloud state first instead of pushing
     // local. A reconnecting/backgrounded tab may hold stale data (old password),
     // and pushing it would overwrite newer cloud data. Pulling refreshes us; any
@@ -2392,16 +2395,23 @@ useEffect(() => {
     setCloudStatus("connecting");
     fetchAndApplyRemote().finally(() => setCloudStatus("online"));
   };
-  const handleOffline = () => setCloudStatus("error");
+  const handleOffline = () => {
+    setIsOnline(false);
+    if (cloudEnabled) setCloudStatus("error");
+  };
   const handleVisibility = () => {
     // Mobile browsers suspend timers (polling) while the tab is backgrounded, so
     // a tab can wake up hours later still holding the old data. As soon as it
-    // returns to the foreground, pull the latest cloud state before anything is
-    // pushed — this is the main fix for "password reverts after 1-2 hours".
+    // returns to the foreground, refresh the connection flag and pull the latest
+    // cloud state before anything is pushed — the main fix for "password reverts
+    // after 1-2 hours".
     if (typeof document !== "undefined" && document.visibilityState === "visible") {
-      fetchAndApplyRemote();
+      if (typeof navigator !== "undefined") setIsOnline(navigator.onLine !== false);
+      if (cloudEnabled) fetchAndApplyRemote();
     }
   };
+  // Sync the flag on mount in case it changed before this effect ran.
+  if (typeof navigator !== "undefined") setIsOnline(navigator.onLine !== false);
   window.addEventListener("online", handleOnline);
   window.addEventListener("offline", handleOffline);
   if (typeof document !== "undefined") {
@@ -3256,6 +3266,7 @@ useEffect(() => {
       newEmployees.push({
         id: Date.now() + Math.floor(Math.random() * 1000000),
         name: displayName,
+        nameEn: String(name || "").trim(),
         fingerprintId: fingerprintId,
         department: department || (language === "ar" ? "غير محدد" : "Unassigned"),
         managerDepartment: department || "",
@@ -5678,6 +5689,7 @@ useEffect(() => {
     const employee = {
       id: Date.now(),
       name: form.name,
+      nameEn: String(form.nameEn || "").trim(),
       fingerprintId: String(form.fingerprintId || "").trim(),
       department: form.department,
       managerDepartment: form.managerDepartment,
@@ -5855,6 +5867,7 @@ useEffect(() => {
     setEditForm({
       ...emptyForm,
       name: employee.name || "",
+      nameEn: employee.nameEn || "",
       fingerprintId: String(employee.fingerprintId || ""),
       department: employee.department || "",
       password: systemUsers.find((u) => u.phone === employee.phone)?.password || "123456",
@@ -5901,6 +5914,7 @@ useEffect(() => {
         ? {
             ...emp,
             name: editForm.name,
+            nameEn: String(editForm.nameEn || "").trim(),
             fingerprintId: String(editForm.fingerprintId || "").trim(),
             department: editForm.department,
             managerDepartment: editForm.managerDepartment,
@@ -6726,6 +6740,86 @@ useEffect(() => {
     setSalaryDepositForm(emptySalaryDepositForm);
     setSalaryDepositStep(1);
   };
+
+  // The system requires an internet connection. If the device is offline, show
+  // a blocking message instead of the app (so nothing can be used offline).
+  if (cloudEnabled && !isOnline) {
+    const dark = themeMode === "dark";
+    return (
+      <div
+        dir={language === "ar" ? "rtl" : "ltr"}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 100000,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+          background: dark ? "#0f172a" : "#f1f5f9",
+          color: dark ? "#e2e8f0" : "#0f172a",
+          fontFamily: "Tajawal, system-ui, sans-serif",
+          textAlign: "center",
+        }}
+      >
+        <div
+          style={{
+            maxWidth: 420,
+            width: "100%",
+            background: dark ? "#1e293b" : "#ffffff",
+            border: `1px solid ${dark ? "#334155" : "#e2e8f0"}`,
+            borderRadius: 16,
+            padding: "32px 24px",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.15)",
+            display: "grid",
+            gap: 14,
+            justifyItems: "center",
+          }}
+        >
+          <div
+            style={{
+              width: 72,
+              height: 72,
+              borderRadius: "50%",
+              background: dark ? "rgba(239,68,68,0.15)" : "#fee2e2",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 34,
+            }}
+          >
+            📡
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>
+            {language === "ar" ? "أنت غير متصل بالإنترنت" : "You are offline"}
+          </div>
+          <div style={{ fontSize: 14, lineHeight: 1.8, color: dark ? "#94a3b8" : "#64748b" }}>
+            {language === "ar"
+              ? "هذا النظام يحتاج اتصالًا بالإنترنت للعمل. تأكد من اتصالك ثم حاول مرة أخرى."
+              : "This system needs an internet connection to work. Check your connection and try again."}
+          </div>
+          <button
+            onClick={() => {
+              if (typeof navigator !== "undefined") setIsOnline(navigator.onLine !== false);
+            }}
+            style={{
+              marginTop: 6,
+              padding: "10px 22px",
+              borderRadius: 10,
+              border: "none",
+              background: "#2563eb",
+              color: "#fff",
+              fontSize: 15,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            {language === "ar" ? "إعادة المحاولة" : "Retry"}
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (!isAuthenticated) {
     if (showRegister) {
@@ -8260,7 +8354,12 @@ useEffect(() => {
                       onClick={() => openEmployeeDetails(emp)}
                       style={ui.clickableRow}
                     >
-                      <td style={ui.td}><strong>{emp.name}</strong></td>
+                      <td style={ui.td}>
+                        <strong>{emp.name}</strong>
+                        {emp.nameEn ? (
+                          <div dir="ltr" style={{ fontSize: 12, color: "var(--text-soft, #64748b)", textAlign: "left", marginTop: 2 }}>{emp.nameEn}</div>
+                        ) : null}
+                      </td>
                       {canManageAll && (
                         <td style={{ ...ui.td, textAlign: "center" }}>
                           {emp.fingerprintId ? (
@@ -8431,7 +8530,8 @@ useEffect(() => {
 
       <Modal open={addDialogOpen} title={t.newEmployee} onClose={() => setAddDialogOpen(false)} maxWidth={1000}>
         <div style={{ ...ui.grid2, ...(isMobileView ? ui.grid2Mobile : {}) }}>
-          <Field label={t.name}><Input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} /></Field>
+          <Field label={language === "ar" ? "الاسم (عربي)" : "Name (Arabic)"}><Input value={form.name} onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))} /></Field>
+          <Field label={language === "ar" ? "الاسم (إنجليزي - كما في ملف البصمة)" : "Name (English - as in fingerprint file)"}><Input dir="ltr" value={form.nameEn} onChange={(e) => setForm((p) => ({ ...p, nameEn: e.target.value }))} placeholder={language === "ar" ? "مثال: Ahmed Salem" : "e.g. Ahmed Salem"} /></Field>
           <Field label={language === "ar" ? "رقم البصمة (Person ID)" : "Fingerprint ID (Person ID)"}><Input value={form.fingerprintId} onChange={(e) => setForm((p) => ({ ...p, fingerprintId: e.target.value }))} placeholder={language === "ar" ? "مثال: 0001" : "e.g. 0001"} /></Field>
           <Field label={t.department}><Input value={form.department} onChange={(e) => setForm((p) => ({ ...p, department: e.target.value }))} /></Field>
           <Field label={t.managerDepartment}><Input value={form.managerDepartment} onChange={(e) => setForm((p) => ({ ...p, managerDepartment: e.target.value }))} /></Field>
@@ -8524,7 +8624,8 @@ useEffect(() => {
 
       <Modal open={editDialogOpen} title={t.editEmployee} onClose={() => setEditDialogOpen(false)} maxWidth={1000}>
         <div style={{ ...ui.grid2, ...(isMobileView ? ui.grid2Mobile : {}) }}>
-          <Field label={t.name}><Input value={editForm.name} onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))} /></Field>
+          <Field label={language === "ar" ? "الاسم (عربي)" : "Name (Arabic)"}><Input value={editForm.name} onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))} /></Field>
+          <Field label={language === "ar" ? "الاسم (إنجليزي - كما في ملف البصمة)" : "Name (English - as in fingerprint file)"}><Input dir="ltr" value={editForm.nameEn} onChange={(e) => setEditForm((p) => ({ ...p, nameEn: e.target.value }))} placeholder={language === "ar" ? "مثال: Ahmed Salem" : "e.g. Ahmed Salem"} /></Field>
           <Field label={language === "ar" ? "رقم البصمة (Person ID)" : "Fingerprint ID (Person ID)"}><Input value={editForm.fingerprintId} onChange={(e) => setEditForm((p) => ({ ...p, fingerprintId: e.target.value }))} placeholder={language === "ar" ? "مثال: 0001" : "e.g. 0001"} /></Field>
           <Field label={t.department}><Input value={editForm.department} onChange={(e) => setEditForm((p) => ({ ...p, department: e.target.value }))} /></Field>
           <Field label={t.managerDepartment}><Input value={editForm.managerDepartment} onChange={(e) => setEditForm((p) => ({ ...p, managerDepartment: e.target.value }))} /></Field>
