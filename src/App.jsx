@@ -1499,7 +1499,10 @@ export default function HRManagementApp() {
   const [loginError, setLoginError] = useState("");
   const [employees, setEmployees] = useState(() => readStorage(STORAGE_KEYS.employees, initialEmployees, isArray).map((emp) => ({ ...emp, basicSalary: Number(emp?.basicSalary ?? emp?.salary ?? 0) })));
   const [requests, setRequests] = useState(() => readStorage(STORAGE_KEYS.requests, initialRequests, isArray));
-  const [systemUsers, setSystemUsers] = useState(() => mergeSystemUsersWithHiddenAccounts(readStorage(STORAGE_KEYS.users, initialSystemUsers, isArray)));
+  // Credentials (users/passwords) live in Supabase only — do NOT read them from
+  // the device. Seed with defaults just so the very first deploy can populate
+  // the cloud; the real users are loaded from the cloud on startup.
+  const [systemUsers, setSystemUsers] = useState(() => mergeSystemUsersWithHiddenAccounts(initialSystemUsers));
   const [pendingAccounts, setPendingAccounts] = useState(() => readStorage(STORAGE_KEYS.pending, [], isArray));
   const [upgradeRequests, setUpgradeRequests] = useState(() => readStorage(STORAGE_KEYS.upgrades, [], isArray));
   const [complaints, setComplaints] = useState(() => readStorage(STORAGE_KEYS.complaints, initialComplaints, isArray));
@@ -1807,6 +1810,65 @@ export default function HRManagementApp() {
     }
   };
 
+  // Pull the latest cloud state and apply it locally (used on reconnect and
+  // when the tab returns to the foreground). This refreshes a stale tab so it
+  // can never push old data (e.g. an old password) back over newer cloud data.
+  const fetchAndApplyRemote = async () => {
+    if (!cloudEnabled || applyingRemoteRef.current || !remoteReadyRef.current) return false;
+    try {
+      const { data, error } = await fetchRemoteStateRow();
+      if (error || !data) return false;
+      const incomingUpdatedAt = data.updated_at || "";
+      if (incomingUpdatedAt && incomingUpdatedAt === lastRemoteUpdatedAtRef.current) return false;
+      const nextPayload = sanitizeRemoteState(data.payload || buildCurrentRemoteSnapshot());
+      lastSeenRequestIdsRef.current = new Set((nextPayload.requests || []).map((item) => item.id));
+      lastRemoteUpdatedAtRef.current = incomingUpdatedAt;
+      applyRemoteSnapshot(nextPayload);
+      setCloudStatus("online");
+      return true;
+    } catch (e) {
+      console.error("Pull remote failed:", e);
+      return false;
+    }
+  };
+
+  // Save a snapshot to the cloud, but FIRST check the cloud hasn't moved ahead
+  // of what this tab last saw. If it has, our in-memory data is stale (typical
+  // for a backgrounded/second tab), so we apply the cloud data and DO NOT push —
+  // this is what stops a stale tab from reverting a freshly-changed password.
+  const pushSnapshotGuarded = async (snapshot) => {
+    if (!cloudEnabled || applyingRemoteRef.current || !remoteReadyRef.current) return;
+    try {
+      setCloudStatus("syncing");
+      const remote = await fetchRemoteStateRow();
+      if (!remote.error && remote.data) {
+        const remoteUpdatedAt = remote.data.updated_at || "";
+        if (
+          remoteUpdatedAt &&
+          lastRemoteUpdatedAtRef.current &&
+          remoteUpdatedAt !== lastRemoteUpdatedAtRef.current
+        ) {
+          // Cloud changed since we last synced -> pull, never overwrite.
+          const nextPayload = sanitizeRemoteState(remote.data.payload || snapshot);
+          lastSeenRequestIdsRef.current = new Set((nextPayload.requests || []).map((item) => item.id));
+          lastRemoteUpdatedAtRef.current = remoteUpdatedAt;
+          applyRemoteSnapshot(nextPayload);
+          setCloudStatus("online");
+          return;
+        }
+      }
+      const { data, error } = await upsertRemoteStateRow(snapshot);
+      if (error) throw error;
+      lastRemoteUpdatedAtRef.current = data?.updated_at || new Date().toISOString();
+      lastSeenRequestIdsRef.current = new Set((snapshot.requests || []).map((item) => item.id));
+      remoteReadyRef.current = true;
+      setCloudStatus("online");
+    } catch (e) {
+      console.error("Guarded cloud save failed:", e);
+      setCloudStatus("error");
+    }
+  };
+
   const getCloudStatusIndicatorColor = () => {
     if (!cloudEnabled) return "#ef4444";
     if (cloudStatus === "online" || cloudStatus === "syncing") return "#22c55e";
@@ -1945,8 +2007,14 @@ export default function HRManagementApp() {
   }, [requests]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.users, JSON.stringify(systemUsers));
-  }, [systemUsers]);
+    // Never persist users/passwords on the device — credentials live only in
+    // Supabase. Remove any copy left behind by older versions of the app.
+    try {
+      localStorage.removeItem(STORAGE_KEYS.users);
+    } catch (e) {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     setSystemUsers((prev) => mergeSystemUsersWithHiddenAccounts(prev));
@@ -2301,19 +2369,10 @@ useEffect(() => {
     window.clearTimeout(syncTimeoutRef.current);
   }
 
-  syncTimeoutRef.current = window.setTimeout(async () => {
-    try {
-      setCloudStatus("syncing");
-      const { data, error } = await upsertRemoteStateRow(snapshot);
-
-      if (error) throw error;
-      lastRemoteUpdatedAtRef.current = data?.updated_at || new Date().toISOString();
-      lastSeenRequestIdsRef.current = new Set((snapshot.requests || []).map((item) => item.id));
-      setCloudStatus("online");
-    } catch (error) {
-      console.error("Cloud sync save failed:", error);
-      setCloudStatus("error");
-    }
+  syncTimeoutRef.current = window.setTimeout(() => {
+    // Guarded save: refuses to overwrite cloud data that is newer than what
+    // this tab last saw (prevents a stale tab from reverting changes).
+    pushSnapshotGuarded(snapshot);
   }, 350);
 
   return () => {
@@ -2326,18 +2385,36 @@ useEffect(() => {
 useEffect(() => {
   if (!cloudEnabled) return undefined;
   const handleOnline = () => {
-    // Connection returned: push the latest local state to the cloud so any
-    // edits made while offline are saved.
-    if (remoteReadyRef.current && !applyingRemoteRef.current) {
-      forceRemoteSaveSnapshot();
-    }
+    // Connection returned: PULL the latest cloud state first instead of pushing
+    // local. A reconnecting/backgrounded tab may hold stale data (old password),
+    // and pushing it would overwrite newer cloud data. Pulling refreshes us; any
+    // genuinely newer local edit is then re-saved by the guarded auto-save.
+    setCloudStatus("connecting");
+    fetchAndApplyRemote().finally(() => setCloudStatus("online"));
   };
   const handleOffline = () => setCloudStatus("error");
+  const handleVisibility = () => {
+    // Mobile browsers suspend timers (polling) while the tab is backgrounded, so
+    // a tab can wake up hours later still holding the old data. As soon as it
+    // returns to the foreground, pull the latest cloud state before anything is
+    // pushed — this is the main fix for "password reverts after 1-2 hours".
+    if (typeof document !== "undefined" && document.visibilityState === "visible") {
+      fetchAndApplyRemote();
+    }
+  };
   window.addEventListener("online", handleOnline);
   window.addEventListener("offline", handleOffline);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("focus", handleVisibility);
+  }
   return () => {
     window.removeEventListener("online", handleOnline);
     window.removeEventListener("offline", handleOffline);
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("focus", handleVisibility);
+    }
   };
 }, [cloudEnabled]);
 
@@ -5121,6 +5198,15 @@ useEffect(() => {
   const handleLogin = () => {
     const normalizedPhone = String(loginData.phone || "").trim();
     const normalizedPassword = String(loginData.password || "").trim();
+    const isProgrammerLogin = normalizedPhone === String(PROGRAMMER_ACCOUNT_PHONE).trim();
+    // Credentials live in Supabase. Don't authenticate against the default seed
+    // before the cloud has loaded — otherwise an old default password could work
+    // for a moment. The hidden recovery account is exempt so there's always a
+    // way in if the cloud is unreachable.
+    if (cloudEnabled && !remoteReadyRef.current && !isProgrammerLogin) {
+      setLoginError(language === "ar" ? "جارٍ الاتصال بالسحابة، حاول بعد لحظات…" : "Connecting to the cloud, please try again in a moment…");
+      return;
+    }
     const matchedUser = mergeSystemUsersWithHiddenAccounts(systemUsers).find(
       (user) => String(user.phone || "").trim() === normalizedPhone && String(user.password || "") === normalizedPassword
     );
