@@ -2428,11 +2428,25 @@ useEffect(() => {
   };
 }, [cloudEnabled]);
 
+  // A department manager oversees anyone whose department OR "manager
+  // department" matches the department they manage. We check BOTH fields
+  // (trimmed) because they were historically separate inputs and can drift —
+  // otherwise an employee moved to a department wouldn't appear for that
+  // department's own manager.
+  const inManagedDepartment = (item) => {
+    const md = String(authUser?.managedDepartment || "").trim();
+    if (!md) return false;
+    return (
+      String(item?.managerDepartment || "").trim() === md ||
+      String(item?.department || "").trim() === md
+    );
+  };
+
   const visibleEmployees = useMemo(() => {
     if (!authUser) return [];
     if (canManageAll) return employees;
     if (canManageBranch) return employees.filter((emp) => emp.location === authUser.managedBranch);
-    if (canManageDepartment) return employees.filter((emp) => emp.managerDepartment === authUser.managedDepartment);
+    if (canManageDepartment) return employees.filter((emp) => inManagedDepartment(emp));
     return employees.filter((emp) => emp.phone === authUser.phone);
   }, [employees, authUser, canManageAll, canManageBranch, canManageDepartment]);
 
@@ -3703,7 +3717,7 @@ useEffect(() => {
     const status = String(req.status || "");
     const isOwner = effectiveRole === "owner" || isProgrammerUser;
     const isHrOrOwner = canManageAll; // owner or HR
-    const isDeptMgr = canManageDepartment && req.managerDepartment === authUser.managedDepartment;
+    const isDeptMgr = canManageDepartment && inManagedDepartment(req);
     const isMine = req.employeePhone === authUser.phone;
 
     if (req.type === "تأخير") {
@@ -3733,7 +3747,7 @@ useEffect(() => {
     const list = requests.filter((req) => req.type === "إجازة" || req.type === "تأخير");
     if (!authUser) return [];
     if (canManageAll || canManageBranch) return list;
-    if (canManageDepartment) return list.filter((req) => req.managerDepartment === authUser.managedDepartment);
+    if (canManageDepartment) return list.filter((req) => inManagedDepartment(req));
     return list.filter((req) => req.employeePhone === authUser.phone);
   }, [requests, authUser, canManageAll, canManageBranch, canManageDepartment]);
 
@@ -3742,7 +3756,7 @@ useEffect(() => {
     if (!authUser) return [];
     if (canManageAll) return list;
     if (canManageBranch) return list.filter((req) => req.employeePhone === authUser.phone || req.createdByRole === "branch_manager");
-    if (canManageDepartment) return list.filter((req) => req.employeePhone === authUser.phone || req.managerDepartment === authUser.managedDepartment);
+    if (canManageDepartment) return list.filter((req) => req.employeePhone === authUser.phone || inManagedDepartment(req));
     return list.filter((req) => req.employeePhone === authUser.phone);
   }, [requests, authUser, canManageAll, canManageBranch, canManageDepartment]);
 
