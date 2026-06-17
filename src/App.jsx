@@ -557,6 +557,31 @@ function normalizeEmployeesCollection(list) {
     : buildDefaultRemoteState().employees;
 }
 
+// Builds the `users` array to push to the cloud while protecting credentials.
+// The cloud is the source of truth for passwords: for every user that already
+// exists in the cloud, we KEEP the cloud password/lifecycle flags, so a stale
+// tab can never revert a freshly-changed password. Phones listed in
+// `exemptPhones` are allowed to write their credentials from local (used by the
+// password-change and user-edit flows). New users (not yet in the cloud) keep
+// their local credentials so additions still work.
+function mergeUsersForPush(localUsers, cloudUsers, exemptPhones) {
+  const cloudByPhone = new Map((Array.isArray(cloudUsers) ? cloudUsers : []).map((u) => [String(u.phone), u]));
+  const exempt = new Set((exemptPhones || []).map((p) => String(p)));
+  return (Array.isArray(localUsers) ? localUsers : []).map((u) => {
+    const phone = String(u.phone);
+    const cloudU = cloudByPhone.get(phone);
+    if (cloudU && !exempt.has(phone)) {
+      return {
+        ...u,
+        password: cloudU.password,
+        mustChangePassword: cloudU.mustChangePassword,
+        passwordChangedOnce: cloudU.passwordChangedOnce,
+      };
+    }
+    return u;
+  });
+}
+
 function sanitizeRemoteState(payload) {
   const defaults = buildDefaultRemoteState();
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return defaults;
@@ -1785,7 +1810,7 @@ export default function HRManagementApp() {
       attendanceReports: readStorage(STORAGE_KEYS.attendanceReports, [], isArray),
     });
 
-  const forceRemoteSaveSnapshot = async (snapshotOverride = null) => {
+  const forceRemoteSaveSnapshot = async (snapshotOverride = null, options = {}) => {
     if (!cloudEnabled || applyingRemoteRef.current) return;
     // CRITICAL: never push to the cloud before the first successful load.
     // Otherwise a save triggered right after deploy (before the cloud data has
@@ -1795,9 +1820,27 @@ export default function HRManagementApp() {
       console.warn("Skipped cloud save: remote not ready yet (protecting cloud data).");
       return;
     }
-    const snapshot = sanitizeRemoteState(snapshotOverride || buildCurrentRemoteSnapshot());
+    // writeUsers: true        -> write the users array exactly as given (used by
+    //                            password change, restore, etc.)
+    // writeUsersFor: [phones] -> keep cloud passwords for everyone EXCEPT these
+    //                            phones (whose credentials are written from local)
+    // default                 -> keep cloud passwords for ALL existing users, so
+    //                            a stale tab can never revert a password.
+    const { writeUsers = false, writeUsersFor = null } = options;
+    let snapshot = sanitizeRemoteState(snapshotOverride || buildCurrentRemoteSnapshot());
     try {
       setCloudStatus("syncing");
+      if (!writeUsers) {
+        try {
+          const remote = await fetchRemoteStateRow();
+          const cloudUsers = remote?.data?.payload?.users;
+          if (Array.isArray(cloudUsers)) {
+            snapshot = { ...snapshot, users: mergeUsersForPush(snapshot.users, cloudUsers, writeUsersFor) };
+          }
+        } catch (e) {
+          /* if the pre-fetch fails, fall back to pushing snapshot.users as-is */
+        }
+      }
       const { data, error } = await upsertRemoteStateRow(snapshot);
       if (error) throw error;
       lastRemoteUpdatedAtRef.current = data?.updated_at || new Date().toISOString();
@@ -1857,6 +1900,12 @@ export default function HRManagementApp() {
           applyRemoteSnapshot(nextPayload);
           setCloudStatus("online");
           return;
+        }
+        // Auto-save must never change passwords (only changePassword does):
+        // keep the cloud password for every existing user.
+        const cloudUsers = remote.data.payload?.users;
+        if (Array.isArray(cloudUsers)) {
+          snapshot = { ...snapshot, users: mergeUsersForPush(snapshot.users, cloudUsers, null) };
         }
       }
       const { data, error } = await upsertRemoteStateRow(snapshot);
@@ -3328,6 +3377,45 @@ useEffect(() => {
         ? `تمت إضافة ${newEmployees.length} موظف. ${skipped ? `تم تخطي ${skipped} موجودين مسبقًا. ` : ""}كلمة السر المؤقتة لكل موظف: 123456`
         : `Added ${newEmployees.length} employees. ${skipped ? `Skipped ${skipped} existing. ` : ""}Temporary password for each: 123456`
     );
+  };
+
+  // Remove employees that were auto-created from an attendance file. They are
+  // identified by their placeholder phone (starts with "بصمة-"). Real employees
+  // have normal phone numbers and are never touched.
+  const removeAutoImportedEmployees = async () => {
+    const isPlaceholder = (p) => String(p || "").trim().startsWith("بصمة-");
+    const toRemove = employees.filter((e) => isPlaceholder(e.phone));
+    if (!toRemove.length) {
+      window.alert(language === "ar" ? "لا يوجد موظفون مُضافون تلقائيًا من ملف البصمة." : "No auto-imported attendance employees found.");
+      return;
+    }
+    const ok = window.confirm(
+      language === "ar"
+        ? `سيتم حذف ${toRemove.length} موظف مُضاف تلقائيًا من ملف البصمة (أرقامهم تبدأ بـ \"بصمة-\"). الموظفون الحقيقيون لن يتأثروا. هل تريد المتابعة؟`
+        : `This will delete ${toRemove.length} employees auto-imported from the attendance file. Real employees won't be affected. Continue?`
+    );
+    if (!ok) return;
+    const nextEmployees = employees.filter((e) => !isPlaceholder(e.phone));
+    const nextUsers = systemUsers.filter((u) => !isPlaceholder(u.phone));
+    setEmployees(nextEmployees);
+    setSystemUsers(nextUsers);
+    try {
+      await forceRemoteSaveSnapshot({
+        employees: nextEmployees,
+        requests,
+        users: nextUsers,
+        pending: pendingAccounts,
+        upgrades: upgradeRequests,
+        complaints,
+        chats,
+        chatCalls,
+        feedback: feedbackEntries,
+        attendanceReports: readStorage(STORAGE_KEYS.attendanceReports, [], isArray),
+      });
+    } catch (e) {
+      console.error("Cleanup cloud sync failed:", e);
+    }
+    window.alert(language === "ar" ? `تم حذف ${toRemove.length} موظف.` : `Deleted ${toRemove.length} employees.`);
   };
 
   const exportAttendanceReport = () => {
@@ -5383,7 +5471,7 @@ useEffect(() => {
             chatCalls: restoredChatCalls,
             feedback: restoredFeedback,
             attendanceReports: restoredAttendance,
-          });
+          }, { writeUsers: true });
         } catch (cloudErr) {
           console.error("Restore cloud sync failed:", cloudErr);
         }
@@ -5611,7 +5699,7 @@ useEffect(() => {
         chats,
         chatCalls,
         feedback: feedbackEntries,
-      });
+      }, { writeUsersFor: [authUser.phone] });
     } catch (e) {
       console.error("Change password cloud save failed:", e);
       setPasswordMessage(language === "ar"
@@ -6006,7 +6094,7 @@ useEffect(() => {
         chats,
         chatCalls,
         feedback: feedbackEntries,
-      });
+      }, { writeUsersFor: [selectedEmployee.phone, editForm.phone] });
     } catch (e) {
       console.error("Save employee cloud sync failed:", e);
     }
@@ -7212,8 +7300,8 @@ useEffect(() => {
                 <Button variant="outline" onClick={openAttendanceUploadPicker} style={isMobileView ? ui.attendanceActionButtonMobile : undefined}>
                   <Download size={16} /> {language === "ar" ? "تنزيل التقرير للسستم" : "Upload Report to System"}
                 </Button>
-                <Button variant="outline" onClick={importEmployeesFromFile} disabled={!lastUploadedRows.length} style={isMobileView ? ui.attendanceActionButtonMobile : undefined}>
-                  <Plus size={16} /> {language === "ar" ? "إضافة موظفي الملف للسستم" : "Import file employees"}
+                <Button variant="outline" onClick={removeAutoImportedEmployees} style={isMobileView ? ui.attendanceActionButtonMobile : undefined}>
+                  <Trash2 size={16} /> {language === "ar" ? "حذف موظفي البصمة المضافين تلقائيًا" : "Delete auto-imported employees"}
                 </Button>
               </>
             )}
