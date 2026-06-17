@@ -1644,6 +1644,9 @@ export default function HRManagementApp() {
   const [leaveReviewNote, setLeaveReviewNote] = useState("");
   const [leaveReviewMessage, setLeaveReviewMessage] = useState("");
   const [leaveReviewSkipBalance, setLeaveReviewSkipBalance] = useState(false);
+  // HR-stage deduction added to the leave (applied only after owner approves).
+  const [leaveReviewDeductionAmount, setLeaveReviewDeductionAmount] = useState("");
+  const [leaveReviewDeductionReason, setLeaveReviewDeductionReason] = useState("");
   // Employee response modal (when the approver modified the day count).
   const [leaveResponseOpen, setLeaveResponseOpen] = useState(false);
   const [leaveResponseRequest, setLeaveResponseRequest] = useState(null);
@@ -3594,6 +3597,41 @@ useEffect(() => {
     return Number.isFinite(parsed) ? parsed : null;
   };
 
+  // === Sequential leave approval flow: Dept Manager -> HR -> Owner ===
+  const LEAVE_STATUS = {
+    DEPT: "بانتظار مدير الإدارة",
+    HR: "بانتظار HR",
+    OWNER: "بانتظار المالك",
+    EMPLOYEE: "بانتظار رد الموظف",
+    RETURNED_HR: "مرتجع لـ HR",
+    APPROVED: "معتمد",
+    REJECTED: "مرفوض",
+  };
+
+  // Returns which action the current user may take on a leave/late request:
+  // "dept" | "hr" | "owner" | "employee" | "hrResend" | "late" | null
+  const getLeaveActionForUser = (req) => {
+    if (!authUser || !req) return null;
+    const status = String(req.status || "");
+    const isOwner = effectiveRole === "owner" || isProgrammerUser;
+    const isHrOrOwner = canManageAll; // owner or HR
+    const isDeptMgr = canManageDepartment && req.managerDepartment === authUser.managedDepartment;
+    const isMine = req.employeePhone === authUser.phone;
+
+    if (req.type === "تأخير") {
+      if (status === "بانتظار الاعتماد" && (canManageAll || canManageBranch || isDeptMgr)) return "late";
+      return null;
+    }
+    // إجازة follows the strict order. Owner/HR may also act at the dept stage
+    // as a fallback so requests never get stuck when a department has no manager.
+    if (status === LEAVE_STATUS.DEPT) return (isDeptMgr || isHrOrOwner) ? "dept" : null;
+    if (status === LEAVE_STATUS.HR) return isHrOrOwner ? "hr" : null;
+    if (status === LEAVE_STATUS.OWNER) return isOwner ? "owner" : null;
+    if (status === LEAVE_STATUS.EMPLOYEE) return isMine ? "employee" : null;
+    if (status === LEAVE_STATUS.RETURNED_HR) return isHrOrOwner ? "hrResend" : null;
+    return null;
+  };
+
   const shouldKeepRequestVisible = (req) => {
     if (!req) return false;
     if (String(req.status || "") === "بانتظار الاعتماد" || req.canDecide) return true;
@@ -3641,7 +3679,10 @@ useEffect(() => {
   }, [visibleFinancialRequests, canManageAll, canManageBranch, canManageDepartment]);
 
   const requestHubHasApprovalActions = canManageAll || canManageBranch || canManageDepartment;
-  const requestHubLeaveRequests = requestHubHasApprovalActions ? approvalLeaveRequests : activeLeaveRequests;
+  // Show all active (non-finalized) leave requests in scope to everyone; the
+  // per-row buttons are gated by getLeaveActionForUser so each role only acts
+  // at its own stage of the sequential flow.
+  const requestHubLeaveRequests = activeLeaveRequests;
   const requestHubFinancialRequests = requestHubHasApprovalActions
     ? approvalFinancialRequests
     : activeFinancialRequests.filter((req) => ["سلفة", "مكافأة", "خصم"].includes(req.type));
@@ -3674,16 +3715,21 @@ useEffect(() => {
   );
 
   const pendingRequestsCount = useMemo(() => {
-    const base = requestHubHasApprovalActions
-      ? [...requestHubLeaveRequests, ...requestHubFinancialRequests]
-      : [...visibleLeaveRequests, ...visibleFinancialRequests];
-    return base.filter((req) => String(req.status || "") === "بانتظار الاعتماد").length;
+    const leaveActionable = visibleLeaveRequests.filter((req) => getLeaveActionForUser(req)).length;
+    const finBase = requestHubHasApprovalActions ? requestHubFinancialRequests : visibleFinancialRequests;
+    const finActionable = finBase.filter((req) => String(req.status || "") === "بانتظار الاعتماد").length;
+    return leaveActionable + finActionable;
   }, [
-    requestHubHasApprovalActions,
-    requestHubLeaveRequests,
-    requestHubFinancialRequests,
     visibleLeaveRequests,
+    requestHubHasApprovalActions,
+    requestHubFinancialRequests,
     visibleFinancialRequests,
+    authUser,
+    effectiveRole,
+    canManageAll,
+    canManageDepartment,
+    canManageBranch,
+    isProgrammerUser,
   ]);
 
   const pendingUpgradeCount = useMemo(() => {
@@ -6091,111 +6137,185 @@ useEffect(() => {
       leaveFrom: normalizeLeaveDateValue(request.leaveFrom),
       leaveTo: normalizeLeaveDateValue(request.leaveTo || request.leaveFrom),
     });
-    setLeaveReviewRequest({ ...request, requestedDays, employeeBalance: Number(employees.find((e) => e.phone === request.employeePhone)?.leaveBalance || 0) });
-    setLeaveReviewDays(String(requestedDays || 0));
+    const reviewAction = getLeaveActionForUser(request); // dept | hr | owner | hrResend | late
+    // Start the editable day count from any value HR already approved.
+    const startDays = Number(request.leaveDaysApproved || requestedDays || 0);
+    setLeaveReviewRequest({
+      ...request,
+      requestedDays,
+      reviewAction,
+      employeeBalance: Number(employees.find((e) => e.phone === request.employeePhone)?.leaveBalance || 0),
+    });
+    setLeaveReviewDays(String(startDays || 0));
     setLeaveReviewNote("");
     setLeaveReviewMessage("");
-    setLeaveReviewSkipBalance(false);
+    setLeaveReviewSkipBalance(Boolean(request.leaveSkipBalance));
+    setLeaveReviewDeductionAmount(request.hrDeductionAmount ? String(request.hrDeductionAmount) : "");
+    setLeaveReviewDeductionReason(request.hrDeductionReason || "");
     setLeaveReviewOpen(true);
   };
 
-  // Approver decision: "approve" (as-is), "modify" (changed days -> back to
-  // employee), or "reject" (requires a note).
-  // Collective approval: leave requires all three approver roles
-  // (department_manager, hr, owner) to approve. Any rejection rejects the
-  // request. A day-count change sends it back to the employee.
-  const LEAVE_APPROVER_ROLES = ["department_manager", "hr", "owner"];
-  const leaveApproverRoleLabel = (role) => {
-    if (role === "owner") return language === "ar" ? "المالك" : "Owner";
-    if (role === "hr") return "HR";
-    if (role === "department_manager") return language === "ar" ? "مدير الإدارة" : "Dept. Manager";
-    return role;
-  };
-
+  // === Sequential leave approval: Dept Manager -> HR -> Owner ===
+  // submitLeaveReview branches on the request's current stage
+  // (leaveReviewRequest.reviewAction): "dept" | "hr" | "hrResend" | "owner" | "late".
+  // - dept: approve -> HR, reject -> cancelled (never reaches HR/owner).
+  // - hr / hrResend: can edit days + add a deduction (amount + reason). If days
+  //   changed OR a deduction was added -> goes to the employee to accept/reject;
+  //   otherwise -> straight to the owner. The deduction is stored on the request
+  //   but only APPLIED (recorded as an approved خصم) when the owner approves.
+  // - owner: approve -> finalize (deduct balance unless skipped, record the HR
+  //   deduction); reject -> returns to HR ("مرتجع لـ HR") to resend or cancel.
   const submitLeaveReview = async (decision) => {
     if (!authUser || !leaveReviewRequest) return;
-    const requestedDays = Number(leaveReviewRequest.requestedDays || 0);
+    const req0 = leaveReviewRequest;
+    const stage = req0.reviewAction; // dept | hr | hrResend | owner | late
+    const requestedDays = Number(req0.requestedDays || 0);
     const approvedDays = Number(leaveReviewDays || 0);
     const note = String(leaveReviewNote || "").trim();
+    const deductionAmount = Math.max(0, Number(leaveReviewDeductionAmount || 0));
+    const deductionReason = String(leaveReviewDeductionReason || "").trim();
 
-    // Which approver role is acting now.
-    const myRole = effectiveRole;
-    if (!LEAVE_APPROVER_ROLES.includes(myRole)) {
-      setLeaveReviewMessage(language === "ar" ? "ليس لديك صلاحية اعتماد الإجازات." : "You are not allowed to approve leave.");
+    if (!stage) {
+      setLeaveReviewMessage(language === "ar" ? "لا يمكنك التصرف في هذا الطلب الآن." : "You can't act on this request now.");
       return;
     }
-
     if (decision === "reject" && !note) {
       setLeaveReviewMessage(language === "ar" ? "يجب كتابة سبب الرفض." : "A reason is required to reject.");
       return;
     }
-    if (decision !== "reject" && (approvedDays <= 0 || isNaN(approvedDays))) {
+    const isHrStage = stage === "hr" || stage === "hrResend";
+    if (decision !== "reject" && isHrStage && (approvedDays <= 0 || isNaN(approvedDays))) {
       setLeaveReviewMessage(language === "ar" ? "عدد الأيام يجب أن يكون أكبر من صفر." : "Approved days must be greater than zero.");
       return;
     }
-
-    const isModified = decision !== "reject" && approvedDays !== requestedDays;
-
-    // Build the updated approvals map for this request.
-    const prevApprovals = leaveReviewRequest.approvals || {};
-    const nextApprovals = { ...prevApprovals };
-
-    let nextStatus;
-    let extra = {};
-
-    if (decision === "reject") {
-      // One rejection rejects the whole request.
-      nextApprovals[myRole] = { decision: "reject", by: authUser.name, note, at: new Date().toISOString() };
-      nextStatus = "مرفوض";
-    } else if (isModified) {
-      // A day-count change resets approvals and goes back to the employee.
-      nextStatus = "بانتظار رد الموظف";
-      extra = { awaitingEmployee: true };
-    } else {
-      // Approve as-is: record this role's approval, then check if all three are in.
-      nextApprovals[myRole] = { decision: "approve", by: authUser.name, note, at: new Date().toISOString() };
-      const allApproved = LEAVE_APPROVER_ROLES.every(
-        (role) => nextApprovals[role] && nextApprovals[role].decision === "approve"
-      );
-      nextStatus = allApproved ? "معتمد" : "بانتظار الاعتماد";
+    if (decision !== "reject" && isHrStage && deductionAmount > 0 && !deductionReason) {
+      setLeaveReviewMessage(language === "ar" ? "اكتب سبب الخصم." : "Enter a reason for the deduction.");
+      return;
     }
 
-    const approverNames = LEAVE_APPROVER_ROLES
-      .filter((role) => nextApprovals[role]?.decision === "approve")
-      .map((role) => nextApprovals[role].by);
-
+    const now = new Date().toISOString();
+    let nextStatus = req0.status;
+    let patch = {};
     let updatedEmployees = employees;
-    const updatedRequests = requests.map((r) => {
-      if (r.id !== leaveReviewRequest.id) return r;
-      return {
-        ...r,
-        status: nextStatus,
-        approvals: isModified ? {} : nextApprovals, // reset on modify
-        decidedBy: approverNames.join("، ") || authUser.name,
-        approvedBy: approverNames.join("، ") || authUser.name,
-        approverRole: authUser.role,
-        canDecide: nextStatus === "بانتظار الاعتماد", // still open for remaining approvers
-        decidedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        approverNote: note || r.approverNote || "",
-        leaveDaysApproved: decision === "reject" ? 0 : approvedDays,
-        leaveDaysRequested: requestedDays,
-        leaveBalanceApplied: nextStatus === "معتمد",
-        leaveSkipBalance: leaveReviewSkipBalance,
-        awaitingEmployee: nextStatus === "بانتظار رد الموظف",
-        ...extra,
-      };
-    });
+    const extraRequests = []; // approved خصم created on final owner approval
 
-    // Deduct balance only when fully approved by all three, and only if the
-    // approver did NOT choose to skip the deduction. Balance may go negative.
-    if (nextStatus === "معتمد" && approvedDays > 0 && !leaveReviewSkipBalance) {
-      updatedEmployees = employees.map((emp) =>
-        emp.phone === leaveReviewRequest.employeePhone
-          ? { ...emp, leaveBalance: Number(emp.leaveBalance || 0) - approvedDays }
-          : emp
-      );
+    // ---- LATE (تأخير): single-step approve/reject ----
+    if (req0.type === "تأخير" || stage === "late") {
+      nextStatus = decision === "reject" ? "مرفوض" : "معتمد";
+      patch = {
+        status: nextStatus,
+        decidedBy: authUser.name,
+        approvedBy: authUser.name,
+        canDecide: false,
+        decidedAt: now,
+        updatedAt: now,
+        approverNote: note || req0.approverNote || "",
+      };
     }
+    // ---- DEPT MANAGER (first) ----
+    else if (stage === "dept") {
+      if (decision === "reject") {
+        nextStatus = "مرفوض";
+        patch = { status: nextStatus, deptDecision: "reject", deptBy: authUser.name, deptNote: note, decidedBy: authUser.name, approvedBy: authUser.name, canDecide: false, decidedAt: now, updatedAt: now, approverNote: note };
+      } else {
+        nextStatus = LEAVE_STATUS.HR;
+        patch = { status: nextStatus, deptDecision: "approve", deptBy: authUser.name, leaveDaysApproved: requestedDays, leaveDaysRequested: requestedDays, decidedBy: authUser.name, canDecide: true, updatedAt: now, awaitingEmployee: false };
+      }
+    }
+    // ---- HR (second) / HR resend after owner rejection ----
+    else if (isHrStage) {
+      if (decision === "reject") {
+        // At HR/resend stage, reject = cancel the request.
+        nextStatus = "مرفوض";
+        patch = { status: nextStatus, hrDecision: "reject", hrBy: authUser.name, hrNote: note, decidedBy: authUser.name, approvedBy: authUser.name, canDecide: false, decidedAt: now, updatedAt: now, approverNote: note };
+      } else {
+        const changed = approvedDays !== requestedDays || deductionAmount > 0;
+        const base = {
+          hrBy: authUser.name,
+          hrDecision: "approve",
+          leaveDaysApproved: approvedDays,
+          leaveDaysRequested: requestedDays,
+          leaveSkipBalance: leaveReviewSkipBalance,
+          hrDeductionAmount: deductionAmount,
+          hrDeductionReason: deductionReason,
+          approverNote: note || req0.approverNote || "",
+          decidedBy: authUser.name,
+          updatedAt: now,
+        };
+        if (changed) {
+          // Edited days or added a deduction -> employee must accept/reject.
+          nextStatus = LEAVE_STATUS.EMPLOYEE;
+          patch = { ...base, status: nextStatus, awaitingEmployee: true, canDecide: false };
+        } else {
+          // No change, no deduction -> straight to the owner.
+          nextStatus = LEAVE_STATUS.OWNER;
+          patch = { ...base, status: nextStatus, awaitingEmployee: false, canDecide: true };
+        }
+      }
+    }
+    // ---- OWNER (final) ----
+    else if (stage === "owner") {
+      if (decision === "reject") {
+        // Returns to HR to resend or cancel.
+        nextStatus = LEAVE_STATUS.RETURNED_HR;
+        patch = { status: nextStatus, ownerDecision: "reject", ownerBy: authUser.name, ownerNote: note, decidedBy: authUser.name, canDecide: true, updatedAt: now, awaitingEmployee: false, approverNote: note };
+      } else {
+        nextStatus = "معتمد";
+        const finalDays = Number(req0.leaveDaysApproved || approvedDays || requestedDays || 0);
+        const skip = Boolean(req0.leaveSkipBalance || leaveReviewSkipBalance);
+        patch = {
+          status: nextStatus,
+          ownerDecision: "approve",
+          ownerBy: authUser.name,
+          decidedBy: authUser.name,
+          approvedBy: authUser.name,
+          canDecide: false,
+          decidedAt: now,
+          updatedAt: now,
+          leaveBalanceApplied: !skip,
+          leaveDaysApproved: finalDays,
+        };
+        // Deduct leave balance (may go negative) unless skipped.
+        if (finalDays > 0 && !skip) {
+          updatedEmployees = employees.map((emp) =>
+            emp.phone === req0.employeePhone
+              ? { ...emp, leaveBalance: Number(emp.leaveBalance || 0) - finalDays }
+              : emp
+          );
+        }
+        // Record the HR deduction as an approved خصم (shows in إجمالي الخصومات المعتمدة).
+        const hrDed = Math.max(0, Number(req0.hrDeductionAmount || 0));
+        if (hrDed > 0) {
+          extraRequests.push({
+            id: Date.now() + Math.floor(Math.random() * 100000),
+            employeePhone: req0.employeePhone,
+            employeeName: req0.employeeName,
+            department: req0.department,
+            managerDepartment: req0.managerDepartment,
+            type: "خصم",
+            amount: hrDed,
+            percentage: 0,
+            valueType: "amount",
+            resolvedAmount: hrDed,
+            deductionMode: "manual",
+            reason: req0.hrDeductionReason || (language === "ar" ? "خصم مرتبط بإجازة" : "Leave-related deduction"),
+            status: "معتمد",
+            approver: "HR / المالك",
+            decidedBy: authUser.name,
+            canDecide: false,
+            createdByRole: "hr",
+            createdAt: now,
+            deductionSource: "leave",
+            relatedLeaveId: req0.id,
+          });
+        }
+      }
+    }
+
+    const updatedRequests = [
+      ...extraRequests,
+      ...requests.map((r) => (r.id === req0.id ? { ...r, ...patch } : r)),
+    ];
 
     setRequests(updatedRequests);
     if (updatedEmployees !== employees) setEmployees(updatedEmployees);
@@ -6229,75 +6349,46 @@ useEffect(() => {
     setLeaveResponseOpen(true);
   };
 
-  // Employee responds to a modified leave: "accept", "reject", or "propose"
-  // (suggest another day count -> back to the approver).
-  const submitLeaveResponse = async (action, proposedDays) => {
+  // Employee responds after HR edited days or added a deduction.
+  // accept -> goes to the owner (final stage). reject -> request cancelled.
+  const submitLeaveResponse = async (action) => {
     if (!authUser || !leaveResponseRequest) return;
+    const req0 = leaveResponseRequest;
     const note = String(leaveResponseNote || "").trim();
+    const now = new Date().toISOString();
 
-    let nextStatus;
-    let extra = {};
+    let patch;
     if (action === "accept") {
-      // Employee accepted the modified day count. Restart the collective
-      // approval cycle with the new requested day count.
-      nextStatus = "بانتظار الاعتماد";
-      extra = {
-        canDecide: true,
+      patch = {
+        status: LEAVE_STATUS.OWNER,
         awaitingEmployee: false,
-        approvals: {},
-        leaveDaysRequested: Number(leaveResponseRequest.leaveDaysApproved || 0),
-        leaveBalanceApplied: false,
+        canDecide: true,
+        employeeRespondedAt: now,
+        updatedAt: now,
+        employeeNote: note || req0.employeeNote || "",
       };
-    } else if (action === "reject") {
-      nextStatus = "مرفوض";
     } else {
-      // propose: send back to approvers with a new requested day count
-      nextStatus = "بانتظار الاعتماد";
-      extra = {
-        canDecide: true,
+      // reject -> cancel the request
+      patch = {
+        status: "مرفوض",
         awaitingEmployee: false,
-        approvals: {},
-        leaveDaysRequested: Number(proposedDays || leaveResponseRequest.leaveDaysApproved || 0),
-        employeeNote: note,
+        canDecide: false,
+        decidedBy: req0.employeeName,
+        decidedAt: now,
+        employeeRespondedAt: now,
+        updatedAt: now,
+        employeeNote: note || req0.employeeNote || "",
       };
     }
 
-    let updatedEmployees = employees;
-    const updatedRequests = requests.map((r) => {
-      if (r.id !== leaveResponseRequest.id) return r;
-      return {
-        ...r,
-        status: nextStatus,
-        awaitingEmployee: false,
-        employeeRespondedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        employeeNote: note || r.employeeNote || "",
-        leaveBalanceApplied: nextStatus === "معتمد",
-        ...extra,
-      };
-    });
-
-    // Balance is deducted only when all three approvers approve (in
-    // submitLeaveReview), not here — accepting restarts the approval cycle.
-    if (nextStatus === "معتمد") {
-      const days = Number(leaveResponseRequest.leaveDaysApproved || 0);
-      if (days > 0) {
-        updatedEmployees = employees.map((emp) =>
-          emp.phone === leaveResponseRequest.employeePhone
-            ? { ...emp, leaveBalance: Math.max(0, Number(emp.leaveBalance || 0) - days) }
-            : emp
-        );
-      }
-    }
-
+    const updatedRequests = requests.map((r) => (r.id === req0.id ? { ...r, ...patch } : r));
     setRequests(updatedRequests);
-    if (updatedEmployees !== employees) setEmployees(updatedEmployees);
     setLeaveResponseOpen(false);
     setLeaveResponseRequest(null);
 
     try {
       await forceRemoteSaveSnapshot({
-        employees: updatedEmployees,
+        employees,
         requests: updatedRequests,
         users: systemUsers,
         pending: pendingAccounts,
@@ -6363,8 +6454,10 @@ useEffect(() => {
       lateTo: leaveRequestForm.type === "تأخير" ? leaveRequestForm.lateTo : "",
       compensateAt: leaveRequestForm.type === "تأخير" ? leaveRequestForm.compensateAt : "",
       reason: leaveRequestForm.reason,
-      status: "بانتظار الاعتماد",
-      approver: canManageAll ? "HR / المالك" : canManageDepartment ? "مدير الإدارة" : "مدير الفرع",
+      status: leaveRequestForm.type === "إجازة" ? "بانتظار مدير الإدارة" : "بانتظار الاعتماد",
+      approver: leaveRequestForm.type === "إجازة"
+        ? "مدير الإدارة ← HR ← المالك"
+        : (canManageAll ? "HR / المالك" : canManageDepartment ? "مدير الإدارة" : "مدير الفرع"),
       decidedBy: "",
       canDecide: true,
       createdByRole: authUser?.role || "employee",
@@ -7617,15 +7710,20 @@ useEffect(() => {
                   <MobileDataCard
                     key={req.id}
                     title={req.employeeName}
-                    action={requestHubHasApprovalActions && req.canDecide ? (
-                      <div style={ui.rowActions}>
-                        <Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{t.approve}</Button>
-                      </div>
-                    ) : (req.awaitingEmployee && req.employeePhone === authUser?.phone ? (
-                      <div style={ui.rowActions}>
-                        <Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{t.confirmAction}</Button>
-                      </div>
-                    ) : null)}
+                    action={(() => {
+                      const act = getLeaveActionForUser(req);
+                      if (act === "employee") return (
+                        <div style={ui.rowActions}>
+                          <Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{t.confirmAction}</Button>
+                        </div>
+                      );
+                      if (act) return (
+                        <div style={ui.rowActions}>
+                          <Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{language === "ar" ? "مراجعة" : "Review"}</Button>
+                        </div>
+                      );
+                      return null;
+                    })()}
                   >
                     <MobileFieldRow label={t.type} value={req.type} />
                     <MobileFieldRow label={t.dateTime} value={req.type === "إجازة" ? `${req.leaveFrom || "-"} → ${req.leaveTo || "-"}` : `${req.lateFrom || "-"} → ${req.lateTo || "-"}${req.compensateAt ? ` | ${t.compensateAt}: ${req.compensateAt}` : ""}`} />
@@ -7648,7 +7746,12 @@ useEffect(() => {
                         <td style={ui.td}>{req.reason}</td>
                         <td style={ui.td}>{req.status}</td>
                         <td style={ui.td}>{req.decidedBy || "-"}</td>
-                        <td style={ui.td}>{requestHubHasApprovalActions && req.canDecide ? <div style={ui.rowActions}><Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{t.approve}</Button></div> : (req.awaitingEmployee && req.employeePhone === authUser?.phone ? <div style={ui.rowActions}><Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{t.confirmAction}</Button></div> : <span style={{ color: "#64748b" }}>{req.status}</span>)}</td>
+                        <td style={ui.td}>{(() => {
+                          const act = getLeaveActionForUser(req);
+                          if (act === "employee") return <div style={ui.rowActions}><Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{t.confirmAction}</Button></div>;
+                          if (act) return <div style={ui.rowActions}><Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{language === "ar" ? "مراجعة" : "Review"}</Button></div>;
+                          return <span style={{ color: "#64748b" }}>{req.status}</span>;
+                        })()}</td>
                       </tr>
                     )) : <tr><td style={ui.emptyCell} colSpan={7}>{t.noRequests}</td></tr>}
                   </tbody>
@@ -9279,10 +9382,21 @@ useEffect(() => {
       </Modal>
 
       <Modal open={leaveReviewOpen} title={language === "ar" ? "مراجعة طلب الإجازة" : "Review Leave Request"} onClose={() => setLeaveReviewOpen(false)} maxWidth={520}>
-        {leaveReviewRequest && (
+        {leaveReviewRequest && (() => {
+          const stg = leaveReviewRequest.reviewAction; // dept | hr | hrResend | owner | late
+          const isHr = stg === "hr" || stg === "hrResend";
+          const balanceAfter = leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0);
+          return (
           <div style={{ display: "grid", gap: 14 }}>
             <div style={{ display: "grid", gap: 6, padding: 12, background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
               <div><strong>{leaveReviewRequest.employeeName}</strong></div>
+              <div style={{ fontSize: 12, fontWeight: 800, color: "var(--accent)" }}>
+                {stg === "dept" ? (language === "ar" ? "أنت: مدير الإدارة (الخطوة ١)" : "You: Dept Manager (step 1)")
+                  : stg === "hr" ? (language === "ar" ? "أنت: HR (الخطوة ٢)" : "You: HR (step 2)")
+                  : stg === "hrResend" ? (language === "ar" ? "أنت: HR — الطلب راجع من المالك" : "You: HR — returned by owner")
+                  : stg === "owner" ? (language === "ar" ? "أنت: المالك (الخطوة الأخيرة)" : "You: Owner (final step)")
+                  : (language === "ar" ? "مراجعة" : "Review")}
+              </div>
               <div style={{ fontSize: 13, color: "var(--text-soft)" }}>{language === "ar" ? "السبب: " : "Reason: "}{leaveReviewRequest.reason || "-"}</div>
               <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
                 {language === "ar" ? "من " : "From "}{normalizeLeaveDateValue(leaveReviewRequest.leaveFrom)} {language === "ar" ? "إلى " : "to "}{normalizeLeaveDateValue(leaveReviewRequest.leaveTo || leaveReviewRequest.leaveFrom)}
@@ -9290,59 +9404,97 @@ useEffect(() => {
               <div style={{ fontSize: 15, fontWeight: 800, color: "var(--accent)" }}>
                 {language === "ar" ? `عدد الأيام المطلوبة: ${leaveReviewRequest.requestedDays}` : `Requested days: ${leaveReviewRequest.requestedDays}`}
               </div>
-              <div style={{ display: "grid", gap: 4, marginTop: 6, paddingTop: 8, borderTop: "1px solid var(--border)" }}>
-                <div style={{ fontSize: 12, fontWeight: 800, color: "var(--text-soft)" }}>{language === "ar" ? "حالة الموافقات (يلزم الثلاثة):" : "Approvals (all three required):"}</div>
-                {["department_manager", "hr", "owner"].map((role) => {
-                  const ap = leaveReviewRequest.approvals?.[role];
-                  const label = role === "owner" ? (language === "ar" ? "المالك" : "Owner") : role === "hr" ? "HR" : (language === "ar" ? "مدير الإدارة" : "Dept. Manager");
-                  const mark = ap?.decision === "approve" ? "✅" : ap?.decision === "reject" ? "❌" : "⏳";
-                  return <div key={role} style={{ fontSize: 13, color: "var(--text-soft)" }}>{mark} {label}{ap?.by ? ` — ${ap.by}` : ""}</div>;
-                })}
-              </div>
-            </div>
-            <Field label={language === "ar" ? "عدد الأيام المعتمدة (يمكن تعديلها)" : "Approved days (editable)"}>
-              <Input type="number" step="0.5" value={leaveReviewDays} onChange={(e) => { setLeaveReviewDays(e.target.value); setLeaveReviewMessage(""); }} />
-            </Field>
-            <div style={{ display: "grid", gap: 4, padding: 10, background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
-              <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
-                {language === "ar" ? "رصيد إجازة الموظف الحالي: " : "Current leave balance: "}
-                <strong style={{ color: "var(--text)" }}>{leaveReviewRequest.employeeBalance} {language === "ar" ? "يوم" : "days"}</strong>
-              </div>
-              {!leaveReviewSkipBalance ? (
-                <div style={{ fontSize: 13, color: (leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0)) < 0 ? "#b45309" : "var(--text-soft)", fontWeight: (leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0)) < 0 ? 800 : 400 }}>
-                  {language === "ar" ? "الرصيد بعد الاعتماد: " : "Balance after approval: "}
-                  {leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0)} {language === "ar" ? "يوم" : "days"}
-                  {(leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0)) < 0 ? (language === "ar" ? " (بالسالب)" : " (negative)") : ""}
+              {stg === "owner" && Number(leaveReviewRequest.leaveDaysApproved || 0) !== Number(leaveReviewRequest.requestedDays) ? (
+                <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
+                  {language === "ar" ? "الأيام المعتمدة من HR: " : "Days approved by HR: "}
+                  <strong style={{ color: "var(--text)" }}>{leaveReviewRequest.leaveDaysApproved}</strong>
                 </div>
-              ) : (
-                <div style={{ fontSize: 13, color: "#15803d" }}>{language === "ar" ? "لن تُخصم هذه الإجازة من الرصيد." : "This leave will not be deducted from the balance."}</div>
-              )}
-              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 4 }}>
-                <input type="checkbox" checked={leaveReviewSkipBalance} onChange={(e) => setLeaveReviewSkipBalance(e.target.checked)} />
-                {language === "ar" ? "هذه الإجازة لا تُخصم من رصيد الموظف" : "Do not deduct this leave from the balance"}
-              </label>
+              ) : null}
+              {(stg === "owner" || stg === "hrResend") && Number(leaveReviewRequest.hrDeductionAmount || 0) > 0 ? (
+                <div style={{ fontSize: 13, color: "#b45309" }}>
+                  {language === "ar" ? "خصم مضاف من HR: " : "Deduction added by HR: "}
+                  <strong>{currency(leaveReviewRequest.hrDeductionAmount)}</strong>
+                  {leaveReviewRequest.hrDeductionReason ? ` — ${leaveReviewRequest.hrDeductionReason}` : ""}
+                </div>
+              ) : null}
+              {stg === "hrResend" && leaveReviewRequest.ownerNote ? (
+                <div style={{ fontSize: 13, color: "#b91c1c", paddingTop: 6, borderTop: "1px solid var(--border)" }}>
+                  {language === "ar" ? "سبب رفض المالك: " : "Owner rejection reason: "}<span style={{ color: "var(--text)" }}>{leaveReviewRequest.ownerNote}</span>
+                </div>
+              ) : null}
             </div>
-            <Field label={language === "ar" ? "ملاحظة (إجبارية عند الرفض أو التعديل)" : "Note (required for reject/modify)"}>
-              <Textarea value={leaveReviewNote} onChange={(e) => setLeaveReviewNote(e.target.value)} rows={2} />
-            </Field>
-            <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
-              {language === "ar" ? "إذا غيّرت عدد الأيام، يرجع الطلب للموظف للموافقة. إذا وافقت بنفس العدد، يُعتمد مباشرة." : "Changing the day count sends it back to the employee. Approving the same count finalizes it."}
-            </p>
-            {leaveReviewMessage ? <p style={ui.errorText}>{leaveReviewMessage}</p> : null}
-            {leaveReviewRequest.approvals?.[effectiveRole]?.decision === "approve" ? (
-              <p style={{ fontSize: 13, color: "#15803d", margin: 0 }}>{language === "ar" ? "لقد وافقت على هذا الطلب بالفعل، بانتظار باقي المعتمدين." : "You already approved. Waiting for the others."}</p>
+
+            {/* HR stage: edit days + add a deduction + skip toggle */}
+            {isHr ? (
+              <>
+                <Field label={language === "ar" ? "عدد الأيام المعتمدة (يمكن تعديلها)" : "Approved days (editable)"}>
+                  <Input type="number" step="0.5" value={leaveReviewDays} onChange={(e) => { setLeaveReviewDays(e.target.value); setLeaveReviewMessage(""); }} />
+                </Field>
+                <div style={{ display: "grid", gap: 10, padding: 10, background: "rgba(180,83,9,0.06)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#b45309" }}>{language === "ar" ? "خصم على الموظف (اختياري)" : "Deduction on employee (optional)"}</div>
+                  <Field label={language === "ar" ? "قيمة الخصم" : "Deduction amount"}>
+                    <Input type="number" step="1" value={leaveReviewDeductionAmount} onChange={(e) => { setLeaveReviewDeductionAmount(e.target.value); setLeaveReviewMessage(""); }} placeholder="0" />
+                  </Field>
+                  <Field label={language === "ar" ? "سبب الخصم" : "Deduction reason"}>
+                    <Input value={leaveReviewDeductionReason} onChange={(e) => setLeaveReviewDeductionReason(e.target.value)} placeholder={language === "ar" ? "مثال: تجاوز رصيد الإجازة" : "e.g. exceeded leave balance"} />
+                  </Field>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                    {language === "ar" ? "الخصم يظهر للموظف الآن، لكنه يُسجَّل في إجمالي الخصومات المعتمدة فقط بعد موافقة المالك." : "The deduction is shown to the employee now but only recorded after the owner approves."}
+                  </div>
+                </div>
+                <div style={{ display: "grid", gap: 4, padding: 10, background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                  <div style={{ fontSize: 13, color: "var(--text-soft)" }}>
+                    {language === "ar" ? "رصيد إجازة الموظف الحالي: " : "Current leave balance: "}
+                    <strong style={{ color: "var(--text)" }}>{leaveReviewRequest.employeeBalance} {language === "ar" ? "يوم" : "days"}</strong>
+                  </div>
+                  {!leaveReviewSkipBalance ? (
+                    <div style={{ fontSize: 13, color: balanceAfter < 0 ? "#b45309" : "var(--text-soft)", fontWeight: balanceAfter < 0 ? 800 : 400 }}>
+                      {language === "ar" ? "الرصيد بعد الاعتماد: " : "Balance after approval: "}
+                      {balanceAfter} {language === "ar" ? "يوم" : "days"}
+                      {balanceAfter < 0 ? (language === "ar" ? " (بالسالب)" : " (negative)") : ""}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: "#15803d" }}>{language === "ar" ? "لن تُخصم هذه الإجازة من الرصيد." : "This leave will not be deducted from the balance."}</div>
+                  )}
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer", marginTop: 4 }}>
+                    <input type="checkbox" checked={leaveReviewSkipBalance} onChange={(e) => setLeaveReviewSkipBalance(e.target.checked)} />
+                    {language === "ar" ? "هذه الإجازة لا تُخصم من رصيد الموظف" : "Do not deduct this leave from the balance"}
+                  </label>
+                </div>
+                <Field label={language === "ar" ? "ملاحظة (إجبارية عند الرفض)" : "Note (required to reject)"}>
+                  <Textarea value={leaveReviewNote} onChange={(e) => setLeaveReviewNote(e.target.value)} rows={2} />
+                </Field>
+                <p style={{ fontSize: 12, color: "var(--text-muted)", margin: 0 }}>
+                  {language === "ar" ? "لو عدّلت الأيام أو أضفت خصم، يروح للموظف للموافقة. لو وافقت بدون تغيير، يروح للمالك مباشرة." : "If you change days or add a deduction it goes to the employee; otherwise it goes straight to the owner."}
+                </p>
+              </>
             ) : null}
+
+            {/* Dept manager + Owner + Late: read-only, approve/reject only */}
+            {(stg === "dept" || stg === "owner" || stg === "late") ? (
+              <Field label={language === "ar" ? "ملاحظة (إجبارية عند الرفض)" : "Note (required to reject)"}>
+                <Textarea value={leaveReviewNote} onChange={(e) => setLeaveReviewNote(e.target.value)} rows={2} />
+              </Field>
+            ) : null}
+
+            {leaveReviewMessage ? <p style={ui.errorText}>{leaveReviewMessage}</p> : null}
+
             <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
-              <Button variant="outline" onClick={() => submitLeaveReview("reject")} style={{ color: "#b91c1c", borderColor: "#fecaca" }}>{language === "ar" ? "رفض" : "Reject"}</Button>
-              <Button
-                onClick={() => submitLeaveReview(Number(leaveReviewDays) !== Number(leaveReviewRequest.requestedDays) ? "modify" : "approve")}
-                disabled={leaveReviewRequest.approvals?.[effectiveRole]?.decision === "approve" && Number(leaveReviewDays) === Number(leaveReviewRequest.requestedDays)}
-              >
-                {Number(leaveReviewDays) !== Number(leaveReviewRequest.requestedDays) ? (language === "ar" ? "تأكيد التعديل" : "Confirm change") : (language === "ar" ? "موافقة" : "Approve")}
+              <Button variant="outline" onClick={() => submitLeaveReview("reject")} style={{ color: "#b91c1c", borderColor: "#fecaca" }}>
+                {stg === "hrResend" ? (language === "ar" ? "إلغاء الطلب" : "Cancel request") : (language === "ar" ? "رفض" : "Reject")}
+              </Button>
+              <Button onClick={() => submitLeaveReview("approve")}>
+                {stg === "dept" ? (language === "ar" ? "موافقة وإرسال لـ HR" : "Approve → HR")
+                  : stg === "owner" ? (language === "ar" ? "اعتماد نهائي" : "Final approve")
+                  : stg === "late" ? (language === "ar" ? "موافقة" : "Approve")
+                  : (Number(leaveReviewDays) !== Number(leaveReviewRequest.requestedDays) || Number(leaveReviewDeductionAmount || 0) > 0)
+                    ? (language === "ar" ? "إرسال للموظف" : "Send to employee")
+                    : (language === "ar" ? "موافقة وإرسال للمالك" : "Approve → Owner")}
               </Button>
             </div>
           </div>
-        )}
+          );
+        })()}
       </Modal>
 
       <Modal open={leaveResponseOpen} title={language === "ar" ? "الرد على تعديل الإجازة" : "Respond to Leave Modification"} onClose={() => setLeaveResponseOpen(false)} maxWidth={520}>
@@ -9378,11 +9530,18 @@ useEffect(() => {
               ) : null}
             </div>
 
+            {Number(leaveResponseRequest.hrDeductionAmount || 0) > 0 ? (
+              <div style={{ fontSize: 14, fontWeight: 800, color: "#b45309", background: "#fef3c7", padding: "8px 12px", borderRadius: 6 }}>
+                {language === "ar" ? "خصم مقترح من HR: " : "Deduction proposed by HR: "}{currency(leaveResponseRequest.hrDeductionAmount)}
+                {leaveResponseRequest.hrDeductionReason ? ` — ${leaveResponseRequest.hrDeductionReason}` : ""}
+                <div style={{ fontWeight: 400, fontSize: 12, marginTop: 4 }}>
+                  {language === "ar" ? "ينطبق فقط لو وافق المالك على الإجازة." : "Applied only if the owner approves the leave."}
+                </div>
+              </div>
+            ) : null}
+
             <Field label={language === "ar" ? "ملاحظة / سبب (إجباري عند الرفض)" : "Note / reason (required to reject)"}>
               <Textarea value={leaveResponseNote} onChange={(e) => { setLeaveResponseNote(e.target.value); setLeaveResponseMessage(""); }} rows={2} />
-            </Field>
-            <Field label={language === "ar" ? "طلب مراجعة: اقتراح عدد أيام آخر (اختياري)" : "Request review: propose other day count (optional)"}>
-              <Input type="number" step="0.5" value={leaveResponseProposedDays} onChange={(e) => setLeaveResponseProposedDays(e.target.value)} placeholder={language === "ar" ? "مثال: 5" : "e.g. 5"} />
             </Field>
             {leaveResponseMessage ? <p style={ui.errorText}>{leaveResponseMessage}</p> : null}
             <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
@@ -9393,10 +9552,7 @@ useEffect(() => {
                 }
                 submitLeaveResponse("reject");
               }} style={{ color: "#b91c1c", borderColor: "#fecaca" }}>{language === "ar" ? "رفض" : "Reject"}</Button>
-              {leaveResponseProposedDays ? (
-                <Button variant="outline" onClick={() => submitLeaveResponse("propose", Number(leaveResponseProposedDays))}>{language === "ar" ? "طلب مراجعة" : "Request review"}</Button>
-              ) : null}
-              <Button onClick={() => submitLeaveResponse("accept")}>{language === "ar" ? "قبول" : "Accept"}</Button>
+              <Button onClick={() => submitLeaveResponse("accept")}>{language === "ar" ? "قبول وإرسال للمالك" : "Accept → Owner"}</Button>
             </div>
           </div>
         )}
