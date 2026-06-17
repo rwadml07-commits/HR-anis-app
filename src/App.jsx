@@ -526,6 +526,129 @@ async function upsertRemoteStateRow(payload) {
   }
 }
 
+// Order-independent stringify so per-record comparisons don't get false
+// "changed" results just because object keys are in a different order.
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map(stableStringify).join(",") + "]";
+  const keys = Object.keys(value).sort();
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + stableStringify(value[k])).join(",") + "}";
+}
+
+// ============================================================================
+// Per-table cloud storage: each entity lives in its own Supabase table, one row
+// per record (id + data jsonb). This replaces the old single-blob storage so a
+// save only touches the records it changed — a stale device can no longer
+// overwrite the whole dataset (which used to revert passwords, upgrades, etc.).
+// ============================================================================
+const REMOTE_TABLE_MAP = [
+  { key: "employees", table: "hr_employees", idField: "id" },
+  { key: "users", table: "hr_users", idField: "phone" },
+  { key: "requests", table: "hr_requests", idField: "id" },
+  { key: "pending", table: "hr_pending", idField: "id" },
+  { key: "upgrades", table: "hr_upgrades", idField: "id" },
+  { key: "complaints", table: "hr_complaints", idField: "id" },
+  { key: "chats", table: "hr_chats", idField: "id" },
+  { key: "chatCalls", table: "hr_chat_calls", idField: "id" },
+  { key: "feedback", table: "hr_feedback", idField: "id" },
+  { key: "attendanceReports", table: "hr_attendance", idField: "id" },
+];
+
+function buildTableRestUrl(table, query = "") {
+  const baseUrl = String(getSupabaseUrl() || "").replace(/\/+$/, "");
+  return `${baseUrl}/rest/v1/${table}${query}`;
+}
+
+async function fetchTableRows(table) {
+  const response = await fetch(buildTableRestUrl(table, "?select=id,data"), {
+    method: "GET",
+    headers: buildSupabaseHeaders(),
+  });
+  if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows : [];
+}
+
+async function upsertTableRows(table, records, idField) {
+  const list = (Array.isArray(records) ? records : []).filter(
+    (r) => r && r[idField] !== undefined && r[idField] !== null && String(r[idField]) !== ""
+  );
+  if (!list.length) return;
+  const now = new Date().toISOString();
+  const rows = list.map((rec) => ({ id: String(rec[idField]), data: rec, updated_at: now }));
+  const CHUNK = 200;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const batch = rows.slice(i, i + CHUNK);
+    const response = await fetch(buildTableRestUrl(table), {
+      method: "POST",
+      headers: buildSupabaseHeaders({ Prefer: "resolution=merge-duplicates,return=minimal" }),
+      body: JSON.stringify(batch),
+    });
+    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+  }
+}
+
+async function deleteTableRows(table, ids) {
+  const list = (Array.isArray(ids) ? ids : []).map((x) => String(x)).filter((x) => x !== "");
+  for (const id of list) {
+    const response = await fetch(buildTableRestUrl(table, `?id=eq.${encodeURIComponent(id)}`), {
+      method: "DELETE",
+      headers: buildSupabaseHeaders({ Prefer: "return=minimal" }),
+    });
+    if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+  }
+}
+
+// Assemble the full state snapshot (same shape the app already uses) from all
+// the per-entity tables. Records are sorted by id for a stable order.
+async function fetchSnapshotFromTables() {
+  const result = {};
+  await Promise.all(
+    REMOTE_TABLE_MAP.map(async ({ key, table, idField }) => {
+      const rows = await fetchTableRows(table);
+      const arr = rows.map((r) => r.data).filter((d) => d && typeof d === "object");
+      arr.sort((a, b) => String(a?.[idField] ?? "").localeCompare(String(b?.[idField] ?? ""), undefined, { numeric: true }));
+      result[key] = arr;
+    })
+  );
+  return result;
+}
+
+// Write ONLY the records that were added/changed, and delete the ones removed,
+// by diffing the new snapshot against the previously-synced snapshot.
+async function syncSnapshotToTables(snapshot, prevSnapshot) {
+  for (const { key, table, idField } of REMOTE_TABLE_MAP) {
+    const nextArr = Array.isArray(snapshot?.[key]) ? snapshot[key] : [];
+    const prevArr = Array.isArray(prevSnapshot?.[key]) ? prevSnapshot[key] : [];
+    const prevById = new Map(prevArr.map((r) => [String(r?.[idField]), r]));
+    const nextIds = new Set(nextArr.map((r) => String(r?.[idField])));
+    const toUpsert = nextArr.filter((r) => {
+      const prev = prevById.get(String(r?.[idField]));
+      return !prev || stableStringify(prev) !== stableStringify(r);
+    });
+    const toDelete = prevArr.map((r) => String(r?.[idField])).filter((id) => id && id !== "undefined" && !nextIds.has(id));
+    await upsertTableRows(table, toUpsert, idField);
+    await deleteTableRows(table, toDelete);
+  }
+}
+
+// One-time migration: if the new tables are empty but the old single-blob row
+// still holds data, copy every record into the new per-entity tables.
+async function migrateBlobToTablesIfNeeded() {
+  try {
+    const [emp, usr] = await Promise.all([fetchTableRows("hr_employees"), fetchTableRows("hr_users")]);
+    if (emp.length > 0 || usr.length > 0) return false; // tables already populated
+    const { data } = await fetchRemoteStateRow();
+    if (!data || !data.payload) return false; // nothing to migrate
+    const blob = sanitizeRemoteState(data.payload);
+    await syncSnapshotToTables(blob, {});
+    return true;
+  } catch (e) {
+    console.error("Blob -> tables migration failed:", e);
+    return false;
+  }
+}
+
 function buildDefaultRemoteState() {
   return {
     employees: initialEmployees.map((emp) => ({ ...emp })),
@@ -1546,6 +1669,10 @@ export default function HRManagementApp() {
   const pollingIntervalRef = useRef(null);
   const lastRemoteUpdatedAtRef = useRef("");
   const lastSeenRequestIdsRef = useRef(new Set());
+  // Per-table sync: the last snapshot we know is in the cloud (used to compute
+  // diffs so we only write changed records) + a signature for change detection.
+  const lastSyncedSnapshotRef = useRef(null);
+  const lastSyncSignatureRef = useRef("");
   const notificationPermissionRef = useRef("default");
 
   const [language, setLanguage] = useState(savedSettings.language || "ar");
@@ -1810,64 +1937,43 @@ export default function HRManagementApp() {
       attendanceReports: readStorage(STORAGE_KEYS.attendanceReports, [], isArray),
     });
 
-  const forceRemoteSaveSnapshot = async (snapshotOverride = null, options = {}) => {
+  const forceRemoteSaveSnapshot = async (snapshotOverride = null) => {
     if (!cloudEnabled || applyingRemoteRef.current) return;
-    // CRITICAL: never push to the cloud before the first successful load.
-    // Otherwise a save triggered right after deploy (before the cloud data has
-    // loaded) would overwrite real cloud data with the code's default data —
-    // wiping passwords, added people, etc.
+    // CRITICAL: never write before the first successful load, so a save right
+    // after deploy can't overwrite real cloud data with default seed data.
     if (!remoteReadyRef.current) {
       console.warn("Skipped cloud save: remote not ready yet (protecting cloud data).");
       return;
     }
-    // writeUsers: true        -> write the users array exactly as given (used by
-    //                            password change, restore, etc.)
-    // writeUsersFor: [phones] -> keep cloud passwords for everyone EXCEPT these
-    //                            phones (whose credentials are written from local)
-    // default                 -> keep cloud passwords for ALL existing users, so
-    //                            a stale tab can never revert a password.
-    const { writeUsers = false, writeUsersFor = null } = options;
-    let snapshot = sanitizeRemoteState(snapshotOverride || buildCurrentRemoteSnapshot());
+    const snapshot = sanitizeRemoteState(snapshotOverride || buildCurrentRemoteSnapshot());
     try {
       setCloudStatus("syncing");
-      if (!writeUsers) {
-        try {
-          const remote = await fetchRemoteStateRow();
-          const cloudUsers = remote?.data?.payload?.users;
-          if (Array.isArray(cloudUsers)) {
-            snapshot = { ...snapshot, users: mergeUsersForPush(snapshot.users, cloudUsers, writeUsersFor) };
-          }
-        } catch (e) {
-          /* if the pre-fetch fails, fall back to pushing snapshot.users as-is */
-        }
-      }
-      const { data, error } = await upsertRemoteStateRow(snapshot);
-      if (error) throw error;
-      lastRemoteUpdatedAtRef.current = data?.updated_at || new Date().toISOString();
+      // Diff-based write: only the records that actually changed are written, so
+      // this save can never overwrite records it didn't touch (e.g. passwords).
+      await syncSnapshotToTables(snapshot, lastSyncedSnapshotRef.current || {});
+      lastSyncedSnapshotRef.current = snapshot;
+      lastSyncSignatureRef.current = stableStringify(snapshot);
       lastSeenRequestIdsRef.current = new Set((snapshot.requests || []).map((item) => item.id));
       remoteReadyRef.current = true;
       setCloudStatus("online");
     } catch (error) {
       console.error("Cloud sync save failed:", error);
-      // Keep remoteReadyRef true: the table is set up, this was likely a
-      // transient network error. Leaving it true lets later edits retry.
       setCloudStatus("error");
     }
   };
 
-  // Pull the latest cloud state and apply it locally (used on reconnect and
-  // when the tab returns to the foreground). This refreshes a stale tab so it
-  // can never push old data (e.g. an old password) back over newer cloud data.
+  // Pull the latest cloud state and apply it locally (used on reconnect and when
+  // the tab returns to the foreground).
   const fetchAndApplyRemote = async () => {
     if (!cloudEnabled || applyingRemoteRef.current || !remoteReadyRef.current) return false;
     try {
-      const { data, error } = await fetchRemoteStateRow();
-      if (error || !data) return false;
-      const incomingUpdatedAt = data.updated_at || "";
-      if (incomingUpdatedAt && incomingUpdatedAt === lastRemoteUpdatedAtRef.current) return false;
-      const nextPayload = sanitizeRemoteState(data.payload || buildCurrentRemoteSnapshot());
+      const raw = await fetchSnapshotFromTables();
+      const sig = stableStringify(raw);
+      if (sig === lastSyncSignatureRef.current) return false; // nothing changed
+      const nextPayload = sanitizeRemoteState(raw);
       lastSeenRequestIdsRef.current = new Set((nextPayload.requests || []).map((item) => item.id));
-      lastRemoteUpdatedAtRef.current = incomingUpdatedAt;
+      lastSyncedSnapshotRef.current = nextPayload;
+      lastSyncSignatureRef.current = sig;
       applyRemoteSnapshot(nextPayload);
       setCloudStatus("online");
       return true;
@@ -1877,41 +1983,16 @@ export default function HRManagementApp() {
     }
   };
 
-  // Save a snapshot to the cloud, but FIRST check the cloud hasn't moved ahead
-  // of what this tab last saw. If it has, our in-memory data is stale (typical
-  // for a backgrounded/second tab), so we apply the cloud data and DO NOT push —
-  // this is what stops a stale tab from reverting a freshly-changed password.
+  // The debounced auto-save uses the same diff-based per-table write.
   const pushSnapshotGuarded = async (snapshot) => {
     if (!cloudEnabled || applyingRemoteRef.current || !remoteReadyRef.current) return;
     try {
       setCloudStatus("syncing");
-      const remote = await fetchRemoteStateRow();
-      if (!remote.error && remote.data) {
-        const remoteUpdatedAt = remote.data.updated_at || "";
-        if (
-          remoteUpdatedAt &&
-          lastRemoteUpdatedAtRef.current &&
-          remoteUpdatedAt !== lastRemoteUpdatedAtRef.current
-        ) {
-          // Cloud changed since we last synced -> pull, never overwrite.
-          const nextPayload = sanitizeRemoteState(remote.data.payload || snapshot);
-          lastSeenRequestIdsRef.current = new Set((nextPayload.requests || []).map((item) => item.id));
-          lastRemoteUpdatedAtRef.current = remoteUpdatedAt;
-          applyRemoteSnapshot(nextPayload);
-          setCloudStatus("online");
-          return;
-        }
-        // Auto-save must never change passwords (only changePassword does):
-        // keep the cloud password for every existing user.
-        const cloudUsers = remote.data.payload?.users;
-        if (Array.isArray(cloudUsers)) {
-          snapshot = { ...snapshot, users: mergeUsersForPush(snapshot.users, cloudUsers, null) };
-        }
-      }
-      const { data, error } = await upsertRemoteStateRow(snapshot);
-      if (error) throw error;
-      lastRemoteUpdatedAtRef.current = data?.updated_at || new Date().toISOString();
-      lastSeenRequestIdsRef.current = new Set((snapshot.requests || []).map((item) => item.id));
+      const safeSnapshot = sanitizeRemoteState(snapshot);
+      await syncSnapshotToTables(safeSnapshot, lastSyncedSnapshotRef.current || {});
+      lastSyncedSnapshotRef.current = safeSnapshot;
+      lastSyncSignatureRef.current = stableStringify(safeSnapshot);
+      lastSeenRequestIdsRef.current = new Set((safeSnapshot.requests || []).map((item) => item.id));
       remoteReadyRef.current = true;
       setCloudStatus("online");
     } catch (e) {
@@ -2327,23 +2408,27 @@ useEffect(() => {
     try {
       notificationPermissionRef.current = await requestBrpZEAWYtiB6bJ16NuLbGCc6CZ6jJdKfb63();
 
-      let { data, error } = await fetchRemoteStateRow();
-      if (error) throw error;
+      // First run after the upgrade: copy the old single-blob row into the new
+      // per-entity tables (no-op if the tables already have data).
+      await migrateBlobToTablesIfNeeded();
 
-      if (!data) {
-        const created = await upsertRemoteStateRow(defaults);
-        if (created.error) throw created.error;
-        data = created.data || { payload: defaults, updated_at: new Date().toISOString() };
+      let raw = await fetchSnapshotFromTables();
+      // Brand-new database (no blob, empty tables): seed the default data.
+      const isEmpty = REMOTE_TABLE_MAP.every(({ key }) => !(Array.isArray(raw[key]) && raw[key].length));
+      if (isEmpty) {
+        raw = defaults;
+        await syncSnapshotToTables(raw, {});
       }
 
       if (cancelled) return;
-      const snapshot = data?.payload || defaults;
+      const snapshot = sanitizeRemoteState(raw);
       if (typeof window !== "undefined") {
         window.localStorage.setItem(STORAGE_KEYS.attendanceReports, JSON.stringify(Array.isArray(snapshot?.attendanceReports) ? snapshot.attendanceReports : []));
         setAttendanceReportsVersion((prev) => prev + 1);
       }
-      lastRemoteUpdatedAtRef.current = data?.updated_at || "";
       lastSeenRequestIdsRef.current = new Set((snapshot.requests || []).map((item) => item.id));
+      lastSyncedSnapshotRef.current = snapshot;
+      lastSyncSignatureRef.current = stableStringify(raw);
       applyRemoteSnapshot(snapshot);
       remoteReadyRef.current = true;
       setCloudStatus("online");
@@ -2364,12 +2449,11 @@ useEffect(() => {
   const pollRemoteState = async () => {
     if (cancelled || !remoteReadyRef.current || applyingRemoteRef.current) return;
     try {
-      const { data, error } = await fetchRemoteStateRow();
-      if (error || !data) return;
-      const incomingUpdatedAt = data.updated_at || "";
-      if (incomingUpdatedAt && incomingUpdatedAt === lastRemoteUpdatedAtRef.current) return;
+      const raw = await fetchSnapshotFromTables();
+      const sig = stableStringify(raw);
+      if (sig === lastSyncSignatureRef.current) return; // nothing changed in the cloud
 
-      const nextPayload = sanitizeRemoteState(data.payload || buildDefaultRemoteState());
+      const nextPayload = sanitizeRemoteState(raw);
       const nextRequests = Array.isArray(nextPayload.requests) ? nextPayload.requests : [];
       const previousIds = lastSeenRequestIdsRef.current;
       const newRequests = nextRequests.filter((item) => !previousIds.has(item.id));
@@ -2383,7 +2467,8 @@ useEffect(() => {
       }
 
       lastSeenRequestIdsRef.current = new Set(nextRequests.map((item) => item.id));
-      lastRemoteUpdatedAtRef.current = incomingUpdatedAt;
+      lastSyncedSnapshotRef.current = nextPayload;
+      lastSyncSignatureRef.current = sig;
       applyRemoteSnapshot(nextPayload);
       setCloudStatus("online");
     } catch (error) {
