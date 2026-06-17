@@ -1802,7 +1802,8 @@ export default function HRManagementApp() {
   const [leaveReviewMessage, setLeaveReviewMessage] = useState("");
   const [leaveReviewSkipBalance, setLeaveReviewSkipBalance] = useState(false);
   // HR-stage deduction added to the leave (applied only after owner approves).
-  const [leaveReviewDeductionAmount, setLeaveReviewDeductionAmount] = useState("");
+  const [leaveReviewDeductionDays, setLeaveReviewDeductionDays] = useState("");
+  const [leaveReviewDeductionPerDay, setLeaveReviewDeductionPerDay] = useState("");
   const [leaveReviewDeductionReason, setLeaveReviewDeductionReason] = useState("");
   // Employee response modal (when the approver modified the day count).
   const [leaveResponseOpen, setLeaveResponseOpen] = useState(false);
@@ -3097,7 +3098,9 @@ useEffect(() => {
 
     return visibleEmployees.map((emp, index) => {
       const empFingerprint = String(emp.fingerprintId || "").replace(/^'+/, "").trim();
+      const empNameEn = String(emp.nameEn || "").trim();
       const uploadedRow =
+        (empNameEn && uploadedByName.get(nameKey(empNameEn))) ||
         (empFingerprint && uploadedByFingerprint.get(empFingerprint)) ||
         uploadedByPhone.get(String(emp.phone || "").trim()) ||
         uploadedByName.get(nameKey(emp.name)) ||
@@ -6393,7 +6396,7 @@ useEffect(() => {
     if (approvedLeaveRequest && approvedLeaveRequest.leaveDaysApproved > 0) {
       updatedEmployees = updatedEmployees.map((emp) =>
         emp.phone === approvedLeaveRequest.employeePhone
-          ? { ...emp, leaveBalance: Math.max(0, Number(emp.leaveBalance || 0) - Number(approvedLeaveRequest.leaveDaysApproved || 0)) }
+          ? { ...emp, leaveBalance: Number(emp.leaveBalance || 0) - Number(approvedLeaveRequest.leaveDaysApproved || 0) }
           : emp
       );
     }
@@ -6437,7 +6440,14 @@ useEffect(() => {
     setLeaveReviewNote("");
     setLeaveReviewMessage("");
     setLeaveReviewSkipBalance(Boolean(request.leaveSkipBalance));
-    setLeaveReviewDeductionAmount(request.hrDeductionAmount ? String(request.hrDeductionAmount) : "");
+    const empBalForDed = Number(employees.find((e) => e.phone === request.employeePhone)?.leaveBalance || 0);
+    const overBalanceDays = Math.max(0, Number(startDays || requestedDays || 0) - empBalForDed);
+    setLeaveReviewDeductionDays(
+      request.hrDeductionDays != null && request.hrDeductionDays !== ""
+        ? String(request.hrDeductionDays)
+        : (overBalanceDays > 0 ? String(overBalanceDays) : "")
+    );
+    setLeaveReviewDeductionPerDay(request.hrDeductionPerDay ? String(request.hrDeductionPerDay) : "");
     setLeaveReviewDeductionReason(request.hrDeductionReason || "");
     setLeaveReviewOpen(true);
   };
@@ -6459,7 +6469,9 @@ useEffect(() => {
     const requestedDays = Number(req0.requestedDays || 0);
     const approvedDays = Number(leaveReviewDays || 0);
     const note = String(leaveReviewNote || "").trim();
-    const deductionAmount = Math.max(0, Number(leaveReviewDeductionAmount || 0));
+    const deductionDays = Math.max(0, Number(leaveReviewDeductionDays || 0));
+    const deductionPerDay = Math.max(0, Number(leaveReviewDeductionPerDay || 0));
+    const deductionAmount = Math.round(deductionDays * deductionPerDay);
     const deductionReason = String(leaveReviewDeductionReason || "").trim();
 
     if (!stage) {
@@ -6524,6 +6536,8 @@ useEffect(() => {
           leaveDaysRequested: requestedDays,
           leaveSkipBalance: leaveReviewSkipBalance,
           hrDeductionAmount: deductionAmount,
+          hrDeductionDays: deductionDays,
+          hrDeductionPerDay: deductionPerDay,
           hrDeductionReason: deductionReason,
           approverNote: note || req0.approverNote || "",
           decidedBy: authUser.name,
@@ -6562,17 +6576,25 @@ useEffect(() => {
           leaveBalanceApplied: !skip,
           leaveDaysApproved: finalDays,
         };
-        // Deduct leave balance (may go negative) unless skipped.
+        // Deduct leave balance unless skipped. Days that HR charged as a money
+        // deduction are "bought out" and do NOT go negative on the balance, so
+        // the negative is reduced by the deduction days (capped at the overage).
         if (finalDays > 0 && !skip) {
-          updatedEmployees = employees.map((emp) =>
-            emp.phone === req0.employeePhone
-              ? { ...emp, leaveBalance: Number(emp.leaveBalance || 0) - finalDays }
-              : emp
-          );
+          const dedDaysForBal = Math.max(0, Number(req0.hrDeductionDays || 0));
+          updatedEmployees = employees.map((emp) => {
+            if (emp.phone !== req0.employeePhone) return emp;
+            const curBal = Number(emp.leaveBalance || 0);
+            const overBalance = Math.max(0, finalDays - curBal); // days that would go negative
+            const offset = Math.min(dedDaysForBal, overBalance); // charged days don't go negative
+            return { ...emp, leaveBalance: curBal - finalDays + offset };
+          });
         }
         // Record the HR deduction as an approved خصم (shows in إجمالي الخصومات المعتمدة).
         const hrDed = Math.max(0, Number(req0.hrDeductionAmount || 0));
         if (hrDed > 0) {
+          const dedDays = Number(req0.hrDeductionDays || 0);
+          const dedPerDay = Number(req0.hrDeductionPerDay || 0);
+          const breakdown = dedDays > 0 && dedPerDay > 0 ? ` (${dedDays} × ${dedPerDay})` : "";
           extraRequests.push({
             id: Date.now() + Math.floor(Math.random() * 100000),
             employeePhone: req0.employeePhone,
@@ -6585,7 +6607,9 @@ useEffect(() => {
             valueType: "amount",
             resolvedAmount: hrDed,
             deductionMode: "manual",
-            reason: req0.hrDeductionReason || (language === "ar" ? "خصم مرتبط بإجازة" : "Leave-related deduction"),
+            deductionDays: dedDays,
+            deductionPerDay: dedPerDay,
+            reason: (req0.hrDeductionReason || (language === "ar" ? "خصم إجازة" : "Leave deduction")) + breakdown,
             status: "معتمد",
             approver: "HR / المالك",
             decidedBy: authUser.name,
@@ -9759,7 +9783,9 @@ useEffect(() => {
         {leaveReviewRequest && (() => {
           const stg = leaveReviewRequest.reviewAction; // dept | hr | hrResend | owner | late
           const isHr = stg === "hr" || stg === "hrResend";
-          const balanceAfter = leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0);
+          const overBalForView = Math.max(0, Number(leaveReviewDays || 0) - leaveReviewRequest.employeeBalance);
+          const dedOffsetForView = Math.min(Math.max(0, Number(leaveReviewDeductionDays || 0)), overBalForView);
+          const balanceAfter = leaveReviewRequest.employeeBalance - Number(leaveReviewDays || 0) + dedOffsetForView;
           return (
           <div style={{ display: "grid", gap: 14 }}>
             <div style={{ display: "grid", gap: 6, padding: 12, background: "var(--surface-soft)", border: "1px solid var(--border)", borderRadius: 8 }}>
@@ -9788,6 +9814,9 @@ useEffect(() => {
                 <div style={{ fontSize: 13, color: "#b45309" }}>
                   {language === "ar" ? "خصم مضاف من HR: " : "Deduction added by HR: "}
                   <strong>{currency(leaveReviewRequest.hrDeductionAmount)}</strong>
+                  {Number(leaveReviewRequest.hrDeductionDays || 0) > 0 && Number(leaveReviewRequest.hrDeductionPerDay || 0) > 0
+                    ? ` (${Number(leaveReviewRequest.hrDeductionDays)} ${language === "ar" ? "يوم" : "days"} × ${currency(Number(leaveReviewRequest.hrDeductionPerDay))})`
+                    : ""}
                   {leaveReviewRequest.hrDeductionReason ? ` — ${leaveReviewRequest.hrDeductionReason}` : ""}
                 </div>
               ) : null}
@@ -9806,9 +9835,23 @@ useEffect(() => {
                 </Field>
                 <div style={{ display: "grid", gap: 10, padding: 10, background: "rgba(180,83,9,0.06)", border: "1px solid var(--border)", borderRadius: 8 }}>
                   <div style={{ fontSize: 13, fontWeight: 800, color: "#b45309" }}>{language === "ar" ? "خصم على الموظف (اختياري)" : "Deduction on employee (optional)"}</div>
-                  <Field label={language === "ar" ? "قيمة الخصم" : "Deduction amount"}>
-                    <Input type="number" step="1" value={leaveReviewDeductionAmount} onChange={(e) => { setLeaveReviewDeductionAmount(e.target.value); setLeaveReviewMessage(""); }} placeholder="0" />
-                  </Field>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Field label={language === "ar" ? "عدد أيام الخصم" : "Deduction days"}>
+                      <Input type="number" step="0.5" min="0" value={leaveReviewDeductionDays} onChange={(e) => { setLeaveReviewDeductionDays(e.target.value); setLeaveReviewMessage(""); }} placeholder="0" />
+                    </Field>
+                    <Field label={language === "ar" ? "قيمة الخصم لكل يوم" : "Amount per day"}>
+                      <Input type="number" step="1" min="0" value={leaveReviewDeductionPerDay} onChange={(e) => { setLeaveReviewDeductionPerDay(e.target.value); setLeaveReviewMessage(""); }} placeholder="0" />
+                    </Field>
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 800, color: "#b45309" }}>
+                    {language === "ar" ? "إجمالي الخصم: " : "Total deduction: "}
+                    {currency(Math.max(0, Number(leaveReviewDeductionDays || 0)) * Math.max(0, Number(leaveReviewDeductionPerDay || 0)))}
+                    {Number(leaveReviewDeductionDays || 0) > 0 && Number(leaveReviewDeductionPerDay || 0) > 0
+                      ? (language === "ar"
+                          ? ` (${Number(leaveReviewDeductionDays)} يوم × ${currency(Number(leaveReviewDeductionPerDay))})`
+                          : ` (${Number(leaveReviewDeductionDays)} days × ${currency(Number(leaveReviewDeductionPerDay))})`)
+                      : ""}
+                  </div>
                   <Field label={language === "ar" ? "سبب الخصم" : "Deduction reason"}>
                     <Input value={leaveReviewDeductionReason} onChange={(e) => setLeaveReviewDeductionReason(e.target.value)} placeholder={language === "ar" ? "مثال: تجاوز رصيد الإجازة" : "e.g. exceeded leave balance"} />
                   </Field>
@@ -9861,7 +9904,7 @@ useEffect(() => {
                 {stg === "dept" ? (language === "ar" ? "موافقة وإرسال لـ HR" : "Approve → HR")
                   : stg === "owner" ? (language === "ar" ? "اعتماد نهائي" : "Final approve")
                   : stg === "late" ? (language === "ar" ? "موافقة" : "Approve")
-                  : (Number(leaveReviewDays) !== Number(leaveReviewRequest.requestedDays) || Number(leaveReviewDeductionAmount || 0) > 0)
+                  : (Number(leaveReviewDays) !== Number(leaveReviewRequest.requestedDays) || (Number(leaveReviewDeductionDays || 0) > 0 && Number(leaveReviewDeductionPerDay || 0) > 0))
                     ? (language === "ar" ? "إرسال للموظف" : "Send to employee")
                     : (language === "ar" ? "موافقة وإرسال للمالك" : "Approve → Owner")}
               </Button>
@@ -9907,6 +9950,9 @@ useEffect(() => {
             {Number(leaveResponseRequest.hrDeductionAmount || 0) > 0 ? (
               <div style={{ fontSize: 14, fontWeight: 800, color: "#b45309", background: "#fef3c7", padding: "8px 12px", borderRadius: 6 }}>
                 {language === "ar" ? "خصم مقترح من HR: " : "Deduction proposed by HR: "}{currency(leaveResponseRequest.hrDeductionAmount)}
+                {Number(leaveResponseRequest.hrDeductionDays || 0) > 0 && Number(leaveResponseRequest.hrDeductionPerDay || 0) > 0
+                  ? ` (${Number(leaveResponseRequest.hrDeductionDays)} ${language === "ar" ? "يوم" : "days"} × ${currency(Number(leaveResponseRequest.hrDeductionPerDay))})`
+                  : ""}
                 {leaveResponseRequest.hrDeductionReason ? ` — ${leaveResponseRequest.hrDeductionReason}` : ""}
                 <div style={{ fontWeight: 400, fontSize: 12, marginTop: 4 }}>
                   {language === "ar" ? "ينطبق فقط لو وافق المالك على الإجازة." : "Applied only if the owner approves the leave."}
