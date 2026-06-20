@@ -6853,8 +6853,16 @@ useEffect(() => {
   };
 
   const submitAdvanceRequest = () => {
-    const employee = getFinancialRowEmployee() || getCurrentEmployee();
-    if (!employee || !advanceRequestForm.amount || !advanceRequestForm.reason) return;
+    const employee = statementEmployee || getFinancialRowEmployee() || getCurrentEmployee();
+    const amount = Number(advanceRequestForm.amount || 0);
+    if (!employee) {
+      window.alert(language === "ar" ? "حدد الموظف أولاً (افتح كشف حساب الموظف)." : "Select an employee first.");
+      return;
+    }
+    if (!amount || amount <= 0) {
+      window.alert(language === "ar" ? "أدخل قيمة السلفة." : "Enter the advance amount.");
+      return;
+    }
 
     const newRequest = {
       id: Date.now(),
@@ -6863,8 +6871,8 @@ useEffect(() => {
       department: employee.department,
       managerDepartment: employee.managerDepartment,
       type: "سلفة",
-      amount: Number(advanceRequestForm.amount || 0),
-      reason: advanceRequestForm.reason,
+      amount,
+      reason: advanceRequestForm.reason || (language === "ar" ? "سلفة" : "Advance"),
       status: canManageAll ? "معتمد" : "بانتظار الاعتماد",
       approver: "HR / المالك",
       decidedBy: canManageAll ? authUser?.name || "" : "",
@@ -10170,6 +10178,13 @@ useEffect(() => {
       </Modal>
 
       <Modal open={advanceSettlementDialogOpen} title={language === "ar" ? "إعداد خصم السلفة" : "Advance deduction settings"} onClose={() => setAdvanceSettlementDialogOpen(false)} maxWidth={520}>
+        {Number(statementEmployee?.advance || 0) <= 0 && (
+          <div style={{ padding: 12, marginBottom: 14, borderRadius: 8, background: "rgba(180,83,9,0.10)", border: "1px solid var(--border)", color: "#b45309", fontSize: 13, lineHeight: 1.8 }}>
+            {language === "ar"
+              ? "لا توجد سلفة لهذا الموظف (الرصيد 0). هذه الشاشة لإعداد خصم سلفة موجودة فقط، مش لإضافة سلفة. لإضافة سلفة جديدة: أغلق هذه النافذة واضغط زر «السلفة»."
+              : "This employee has no advance (balance 0). This screen only sets up deduction of an existing advance — it does not add one. To add a new advance, close this and use the “Advance” button."}
+          </div>
+        )}
         <Field label={language === "ar" ? "طريقة خصم السلفة" : "Advance deduction mode"}>
           <Select value={advanceSettlementForm.deductionMode} onChange={(e) => setAdvanceSettlementForm((p) => ({ ...p, deductionMode: e.target.value }))}>
             <option value="automatic">{language === "ar" ? "تلقائي من المرتب" : "Automatic from salary"}</option>
