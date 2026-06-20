@@ -1790,6 +1790,7 @@ export default function HRManagementApp() {
   const cameraStreamRef = useRef(null);
 
   const [expandedSalaryEmployeeId, setExpandedSalaryEmployeeId] = useState(null);
+  const [expandedAttendanceGroups, setExpandedAttendanceGroups] = useState({});
   const [voicePlaybackId, setVoicePlaybackId] = useState(null);
 
   const [leaveRequestForm, setLeaveRequestForm] = useState(emptyLeaveRequestForm);
@@ -3964,6 +3965,27 @@ useEffect(() => {
   const requestHubFinancialRequests = requestHubHasApprovalActions
     ? approvalFinancialRequests
     : activeFinancialRequests.filter((req) => ["سلفة", "مكافأة", "خصم"].includes(req.type));
+  // Group attendance fingerprint deductions (absence/late) by day, so they show
+  // as one collapsible bar per day instead of a long flat list. Everything else
+  // stays as normal rows.
+  const { attendanceDeductionGroups, nonAttendanceFinancialRequests } = useMemo(() => {
+    const groupsMap = new Map();
+    const rest = [];
+    requestHubFinancialRequests.forEach((req) => {
+      if (req.deductionSource === "attendance" && req.attendanceDate) {
+        const kind = req.attendancePenaltyKind === "late" ? "late" : "absence";
+        const key = `${kind}|${req.attendanceDate}`;
+        if (!groupsMap.has(key)) groupsMap.set(key, { key, kind, date: req.attendanceDate, items: [] });
+        groupsMap.get(key).items.push(req);
+      } else {
+        rest.push(req);
+      }
+    });
+    const groups = Array.from(groupsMap.values()).sort(
+      (a, b) => String(b.date).localeCompare(String(a.date)) || a.kind.localeCompare(b.kind)
+    );
+    return { attendanceDeductionGroups: groups, nonAttendanceFinancialRequests: rest };
+  }, [requestHubFinancialRequests]);
   const approvalLogLeaveRequests = useMemo(
     () =>
       visibleLeaveRequests.filter((req) =>
@@ -5022,6 +5044,17 @@ useEffect(() => {
       })),
     };
   };
+
+  // Keep the open account-statement in sync with the latest employee data, so
+  // changes like a newly added advance reflect immediately in the statement
+  // (statementEmployee held a stale snapshot, making advances look "not added").
+  useEffect(() => {
+    setStatementEmployee((prev) => {
+      if (!prev) return prev;
+      const live = employees.find((e) => e.id === prev.id);
+      return live || prev;
+    });
+  }, [employees]);
 
   const statementData = statementEmployee ? getEmployeeFinancialStatement(statementEmployee) : null;
 
@@ -6408,6 +6441,31 @@ useEffect(() => {
 
     await forceRemoteSaveSnapshot({
       employees: updatedEmployees,
+      requests: updatedRequests,
+      users: systemUsers,
+      pending: pendingAccounts,
+      upgrades: upgradeRequests,
+      complaints,
+      chats,
+      chatCalls,
+      feedback: feedbackEntries,
+    });
+  };
+
+  // Approve/reject a whole attendance-deduction group (one day) in one action.
+  const decideAttendanceGroup = async (items, status) => {
+    if (!authUser || !Array.isArray(items) || !items.length) return;
+    const ids = new Set(items.filter((r) => r.canDecide !== false).map((r) => r.id));
+    if (!ids.size) return;
+    const now = new Date().toISOString();
+    const updatedRequests = requests.map((r) =>
+      ids.has(r.id)
+        ? { ...r, status, decidedBy: authUser.name, approvedBy: authUser.name, canDecide: false, decidedAt: now, updatedAt: now }
+        : r
+    );
+    setRequests(updatedRequests);
+    await forceRemoteSaveSnapshot({
+      employees,
       requests: updatedRequests,
       users: systemUsers,
       pending: pendingAccounts,
@@ -8167,9 +8225,65 @@ useEffect(() => {
                 {language === "ar" ? "سجل الاعتماد أو الرفض" : "Approval / Rejection Log"}
               </Button>
             </div>
-            {isMobileView ? (
+            {/* Attendance fingerprint deductions: one collapsible bar per day */}
+            {attendanceDeductionGroups.length > 0 && (
+              <div style={{ display: "grid", gap: 10, marginBottom: 14 }}>
+                {attendanceDeductionGroups.map((group) => {
+                  const isOpen = !!expandedAttendanceGroups[group.key];
+                  const groupLabel = group.kind === "late" ? (language === "ar" ? "تأخير" : "Late") : (language === "ar" ? "غياب" : "Absence");
+                  const pendingCount = group.items.filter((r) => r.canDecide).length;
+                  return (
+                    <div key={group.key} style={{ border: "1px solid var(--border)", borderRadius: 10, overflow: "hidden", background: "var(--surface-soft)" }}>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedAttendanceGroups((p) => ({ ...p, [group.key]: !p[group.key] }))}
+                        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 14px", background: "transparent", border: "none", cursor: "pointer", color: "inherit", font: "inherit" }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <span style={{ fontSize: 15, color: "var(--text-muted)" }}>{isOpen ? "▾" : "◀"}</span>
+                          <div style={{ textAlign: "start" }}>
+                            <div style={{ fontWeight: 800, color: "var(--text)" }}>{groupLabel} — {language === "ar" ? "يوم" : "day"} {group.date}</div>
+                            <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{group.items.length} {language === "ar" ? "موظف" : "employees"}{pendingCount ? ` · ${pendingCount} ${language === "ar" ? "بانتظار الاعتماد" : "pending"}` : ""}</div>
+                          </div>
+                        </div>
+                        <Badge>{group.items.length}</Badge>
+                      </button>
+                      {isOpen && (
+                        <div style={{ borderTop: "1px solid var(--border)", padding: "10px 14px 14px" }}>
+                          {requestHubHasApprovalActions && pendingCount > 0 && (
+                            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginBottom: 10 }}>
+                              <Button style={ui.smallBtn} onClick={() => decideAttendanceGroup(group.items, "معتمد")}>{language === "ar" ? "اعتماد الكل" : "Approve all"}</Button>
+                              <Button variant="outline" style={ui.smallBtn} onClick={() => decideAttendanceGroup(group.items, "مرفوض")}>{language === "ar" ? "رفض الكل" : "Reject all"}</Button>
+                            </div>
+                          )}
+                          <div style={{ display: "grid", gap: 6 }}>
+                            {group.items.map((req) => (
+                              <div key={req.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "8px 10px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                                <div style={{ minWidth: 0 }}>
+                                  <div style={{ fontWeight: 700, color: "var(--text)" }}>{req.employeeName}</div>
+                                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{currency(req.resolvedAmount || req.amount)} · {req.status}</div>
+                                </div>
+                                {requestHubHasApprovalActions && req.canDecide ? (
+                                  <div style={ui.rowActions}>
+                                    <Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button>
+                                    <Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button>
+                                  </div>
+                                ) : <span style={{ color: "#64748b", fontSize: 12 }}>{req.status}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {nonAttendanceFinancialRequests.length > 0 ? (
+              isMobileView ? (
               <div style={ui.mobileCardsStack}>
-                {requestHubFinancialRequests.length ? requestHubFinancialRequests.map((req) => (
+                {nonAttendanceFinancialRequests.map((req) => (
                   <MobileDataCard
                     key={req.id}
                     title={req.employeeName}
@@ -8194,14 +8308,14 @@ useEffect(() => {
                     <MobileFieldRow label={t.status} value={req.status} />
                     <MobileFieldRow label={t.approvedBy} value={req.decidedBy || "-"} accent />
                   </MobileDataCard>
-                )) : <div style={ui.chatEmptySide}>{t.noRequests}</div>}
+                ))}
               </div>
             ) : (
               <div style={ui.tableWrap}>
                 <table style={ui.table}>
                   <thead><tr><th style={ui.th}>{t.employee}</th><th style={ui.th}>{t.type}</th><th style={ui.th}>{t.amount}</th><th style={ui.th}>{t.reason}</th><th style={ui.th}>{t.status}</th><th style={ui.th}>{t.approvedBy}</th><th style={ui.th}>{t.action}</th></tr></thead>
                   <tbody>
-                    {requestHubFinancialRequests.length ? requestHubFinancialRequests.map((req) => (
+                    {nonAttendanceFinancialRequests.map((req) => (
                       <tr key={req.id}>
                         <td style={ui.td}><strong>{req.employeeName}</strong></td>
                         <td style={ui.td}>{req.type}</td>
@@ -8211,11 +8325,14 @@ useEffect(() => {
                         <td style={ui.td}>{req.decidedBy || "-"}</td>
                         <td style={ui.td}>{requestHubHasApprovalActions && req.canDecide ? <div style={ui.rowActions}>{req.type === "إجازة" ? <Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{language === "ar" ? "مراجعة" : "Review"}</Button> : <><Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button><Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button></>}</div> : (req.awaitingEmployee && authUser?.phone === req.employeePhone ? <Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{language === "ar" ? "الرد على التعديل" : "Respond"}</Button> : <span style={{ color: "#64748b" }}>{req.status}</span>)}</td>
                       </tr>
-                    )) : <tr><td style={ui.emptyCell} colSpan={7}>{t.noRequests}</td></tr>}
+                    ))}
                   </tbody>
                 </table>
               </div>
-            )}
+            )
+            ) : (attendanceDeductionGroups.length === 0 ? (
+              <div style={ui.chatEmptySide}>{t.noRequests}</div>
+            ) : null)}
           </Card>
         </>
       )}
