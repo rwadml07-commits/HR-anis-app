@@ -1741,6 +1741,12 @@ export default function HRManagementApp() {
   const [statementEmployee, setStatementEmployee] = useState(null);
   const [notificationDialogOpen, setNotificationDialogOpen] = useState(false);
   const [selectedNotification, setSelectedNotification] = useState(null);
+  // PWA install state
+  const [pwaInstallEvent, setPwaInstallEvent] = useState(null);
+  const [pwaIsIOS, setPwaIsIOS] = useState(false);
+  const [pwaStandalone, setPwaStandalone] = useState(false);
+  const [pwaInstallDismissed, setPwaInstallDismissed] = useState(false);
+  const [iosInstallHintOpen, setIosInstallHintOpen] = useState(false);
   const [approvalLogOpen, setApprovalLogOpen] = useState(false);
   const [approvalLogType, setApprovalLogType] = useState("leave");
   const [feedbackWidgetOpen, setFeedbackWidgetOpen] = useState(false);
@@ -2563,6 +2569,49 @@ useEffect(() => {
     }
   };
 }, [cloudEnabled]);
+
+  // PWA: register the service worker and wire up the install prompt.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const ua = navigator.userAgent || "";
+    const iOS = /iphone|ipad|ipod/i.test(ua) && !window.MSStream;
+    setPwaIsIOS(iOS);
+    const standalone =
+      (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+      window.navigator.standalone === true;
+    setPwaStandalone(!!standalone);
+
+    const onBeforeInstall = (e) => {
+      e.preventDefault();
+      setPwaInstallEvent(e);
+    };
+    const onInstalled = () => {
+      setPwaInstallEvent(null);
+      setPwaStandalone(true);
+    };
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    window.addEventListener("appinstalled", onInstalled);
+
+    if ("serviceWorker" in navigator && window.location.protocol === "https:") {
+      navigator.serviceWorker.register("/sw.js").catch((err) => {
+        console.warn("Service worker registration failed:", err);
+      });
+    }
+    return () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (pwaInstallEvent) {
+      pwaInstallEvent.prompt();
+      try { await pwaInstallEvent.userChoice; } catch (e) {}
+      setPwaInstallEvent(null);
+    } else if (pwaIsIOS) {
+      setIosInstallHintOpen(true);
+    }
+  };
 
   // A department manager oversees anyone whose department OR "manager
   // department" matches the department they manage. We check BOTH fields
@@ -8186,6 +8235,7 @@ useEffect(() => {
                     <MobileFieldRow label={t.dateTime} value={req.type === "إجازة" ? `${req.leaveFrom || "-"} → ${req.leaveTo || "-"}` : `${req.lateFrom || "-"} → ${req.lateTo || "-"}${req.compensateAt ? ` | ${t.compensateAt}: ${req.compensateAt}` : ""}`} />
                     <MobileFieldRow label={t.reason} value={req.reason || "-"} />
                     <MobileFieldRow label={t.status} value={req.status} />
+                    {req.status === "مرفوض" && req.approverNote ? <MobileFieldRow label={language === "ar" ? "سبب الرفض" : "Rejection reason"} value={req.approverNote} /> : null}
                     <MobileFieldRow label={t.approvedBy} value={req.decidedBy || "-"} accent />
                   </MobileDataCard>
                 )) : <div style={ui.chatEmptySide}>{t.noRequests}</div>}
@@ -8201,7 +8251,7 @@ useEffect(() => {
                         <td style={ui.td}>{req.type}</td>
                         <td style={ui.td}>{req.type === "إجازة" ? `${req.leaveFrom || "-"} → ${req.leaveTo || "-"}` : `${req.lateFrom || "-"} → ${req.lateTo || "-"}${req.compensateAt ? ` | ${t.compensateAt}: ${req.compensateAt}` : ""}`}</td>
                         <td style={ui.td}>{req.reason}</td>
-                        <td style={ui.td}>{req.status}</td>
+                        <td style={ui.td}>{req.status}{req.status === "مرفوض" && req.approverNote ? <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-muted)" }}>{language === "ar" ? "سبب الرفض: " : "Reason: "}{req.approverNote}</div> : null}</td>
                         <td style={ui.td}>{req.decidedBy || "-"}</td>
                         <td style={ui.td}>{(() => {
                           const act = getLeaveActionForUser(req);
@@ -9291,6 +9341,36 @@ useEffect(() => {
         ) : null}
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
           <Button variant="outline" onClick={() => { setNotificationDialogOpen(false); setSelectedNotification(null); }}>{t.close}</Button>
+        </div>
+      </Modal>
+
+      {(!pwaStandalone && !pwaInstallDismissed && (pwaInstallEvent || pwaIsIOS)) ? (
+        <div style={{ position: "fixed", insetInlineStart: 0, insetInlineEnd: 0, bottom: 16, display: "flex", justifyContent: "center", zIndex: 4000, pointerEvents: "none" }}>
+          <button
+            onClick={handleInstallClick}
+            style={{ pointerEvents: "auto", display: "inline-flex", alignItems: "center", gap: 8, background: "var(--primary)", color: "var(--primary-contrast)", border: "none", borderRadius: 999, padding: "10px 16px", fontWeight: 800, fontSize: 14, boxShadow: "0 10px 28px rgba(0,0,0,0.35)", cursor: "pointer" }}
+          >
+            <Download size={18} />
+            <span>{language === "ar" ? "تثبيت التطبيق على الجهاز" : "Install app"}</span>
+            <span
+              role="button"
+              onClick={(e) => { e.stopPropagation(); setPwaInstallDismissed(true); }}
+              style={{ marginInlineStart: 6, opacity: 0.85, fontWeight: 700, padding: "0 2px" }}
+            >✕</span>
+          </button>
+        </div>
+      ) : null}
+
+      <Modal open={iosInstallHintOpen} title={language === "ar" ? "تثبيت التطبيق على الآيفون" : "Install on iPhone"} onClose={() => setIosInstallHintOpen(false)} maxWidth={460}>
+        <div style={{ display: "grid", gap: 10, fontSize: 14, lineHeight: 1.9, color: "var(--text)" }}>
+          <div>{language === "ar" ? "علشان تثبّت التطبيق وتستقبل الإشعارات على الآيفون:" : "To install and get notifications on iPhone:"}</div>
+          <div>{language === "ar" ? "١) افتح الموقع من متصفّح سفاري (Safari)." : "1) Open the site in Safari."}</div>
+          <div>{language === "ar" ? "٢) اضغط زر المشاركة في الأسفل (مربّع وفوقه سهم)." : "2) Tap the Share button (a square with an arrow)."}</div>
+          <div>{language === "ar" ? "٣) اختر «إضافة إلى الشاشة الرئيسية»." : "3) Choose ‘Add to Home Screen’."}</div>
+          <div>{language === "ar" ? "٤) افتح التطبيق من الأيقونة الجديدة، وفعّل الإشعارات لمّا يطلبها." : "4) Open it from the new icon and allow notifications when asked."}</div>
+        </div>
+        <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}>
+          <Button onClick={() => setIosInstallHintOpen(false)}>{t.close || (language === "ar" ? "إغلاق" : "Close")}</Button>
         </div>
       </Modal>
 
