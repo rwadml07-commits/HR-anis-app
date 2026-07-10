@@ -2485,7 +2485,8 @@ useEffect(() => {
   };
 
   loadRemoteState();
-  pollingIntervalRef.current = window.setInterval(pollRemoteState, 2000);
+  // Poll every 15s (was 2s) to cut Supabase egress ~8x and stay within free-tier limits.
+  pollingIntervalRef.current = window.setInterval(pollRemoteState, 15000);
 
   return () => {
     cancelled = true;
