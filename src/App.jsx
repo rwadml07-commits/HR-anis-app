@@ -447,7 +447,7 @@ function isRemoteSyncEnabled() {
 // the matching private key lives only in the Supabase `send-push` edge function
 // secrets. Override per-deployment with VITE_VAPID_PUBLIC_KEY if you rotate keys.
 const DEFAULT_VAPID_PUBLIC_KEY =
-  "BM-8DnmqhP6Y4nlHj7c3o8ZrkDT4IoqNvbTFym-jpq18hmS16bl0CWxNdJ27qkgzasesJTqRMBTVPGOs4GFmwk0";
+  "BCN-9nMRBUOoFJtqI9DE1sxj43W-DSAfc4hrSzZjZvhy70fX1pYPAmQw0DK1HfM1h_u6fzxzFee81UFcUVdmE6A";
 
 function getVapidPublicKey() {
   return (
