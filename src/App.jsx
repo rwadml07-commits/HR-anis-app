@@ -460,8 +460,23 @@ async function requestBrpZEAWYtiB6bJ16NuLbGCc6CZ6jJdKfb63() {
 function showBrowserNotification(title, body) {
   if (typeof window === "undefined" || !("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
+  const options = { body, icon: "/icon-192.png", badge: "/icon-192.png", dir: "rtl", lang: "ar" };
+  // On installed PWAs / Android the `new Notification()` constructor throws
+  // ("Illegal constructor"); the notification MUST be shown via the service
+  // worker registration. Fall back to the constructor on desktop browsers
+  // that allow it (and when no service worker is available).
+  if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+    navigator.serviceWorker.ready
+      .then((registration) => registration.showNotification(title, options))
+      .catch(() => {
+        try {
+          new Notification(title, options);
+        } catch {}
+      });
+    return;
+  }
   try {
-    new Notification(title, { body, dir: "rtl", lang: "ar" });
+    new Notification(title, options);
   } catch {}
 }
 
@@ -2160,21 +2175,46 @@ export default function HRManagementApp() {
     setSystemUsers((prev) => mergeSystemUsersWithHiddenAccounts(prev));
   }, []);
 
-  // Apply automatic leave accrual once on load: for each auto-accrual employee,
-  // add the earned days for every full period elapsed since the last accrual.
+  // Apply automatic leave accrual: for each auto-accrual employee, add the
+  // earned days for every full period elapsed since the last accrual.
+  // computeLeaveAccrual is idempotent (it advances leaveAccrualLastApplied),
+  // so this is safe to run repeatedly. We run it a few seconds after mount
+  // (once cloud data has loaded — the one-shot version missed it because it
+  // ran against the seed data before applyRemoteSnapshot arrived) and then
+  // hourly, so month/period rollovers are caught even while the app stays open.
   useEffect(() => {
-    const now = new Date();
-    let changed = false;
-    setEmployees((prev) => {
-      const next = prev.map((emp) => {
-        const accrual = computeLeaveAccrual(emp, now);
-        if (!accrual) return emp;
-        changed = true;
-        const addedBalance = Number(emp.leaveBalance || 0) + accrual.daysToAdd;
-        return { ...emp, leaveBalance: addedBalance, leaveAccrualLastApplied: accrual.newLastApplied };
+    const applyAccrual = () => {
+      // Don't fight a remote snapshot that's mid-apply.
+      if (applyingRemoteRef.current) return;
+      const now = new Date();
+      setEmployees((prev) => {
+        let changed = false;
+        const next = prev.map((emp) => {
+          const accrual = computeLeaveAccrual(emp, now);
+          if (!accrual) return emp;
+          if (accrual.daysToAdd <= 0) {
+            // Only seed leaveAccrualLastApplied when it isn't set yet, to avoid
+            // an endless state-update/cloud-write loop each interval.
+            if (accrual.newLastApplied && !emp.leaveAccrualLastApplied) {
+              changed = true;
+              return { ...emp, leaveAccrualLastApplied: accrual.newLastApplied };
+            }
+            return emp;
+          }
+          changed = true;
+          const addedBalance = Number(emp.leaveBalance || 0) + accrual.daysToAdd;
+          return { ...emp, leaveBalance: addedBalance, leaveAccrualLastApplied: accrual.newLastApplied };
+        });
+        return changed ? next : prev;
       });
-      return changed ? next : prev;
-    });
+    };
+
+    const initialTimer = window.setTimeout(applyAccrual, cloudEnabled ? 5000 : 500);
+    const interval = window.setInterval(applyAccrual, 60 * 60 * 1000);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(interval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2463,13 +2503,39 @@ useEffect(() => {
 
       const nextPayload = sanitizeRemoteState(raw);
       const nextRequests = Array.isArray(nextPayload.requests) ? nextPayload.requests : [];
+      const prevRequests = Array.isArray(lastSyncedSnapshotRef.current?.requests)
+        ? lastSyncedSnapshotRef.current.requests
+        : [];
+      const prevRequestsById = new Map(prevRequests.map((item) => [item.id, item]));
       const previousIds = lastSeenRequestIdsRef.current;
       const newRequests = nextRequests.filter((item) => !previousIds.has(item.id));
 
-      if (newRequests.length && (authUser?.role === "owner" || authUser?.role === "hr")) {
+      const myRole = authUser?.role;
+      const myPhone = authUser?.phone;
+      const requestTypes = ["إجازة", "تأخير", "سلفة", "مكافأة", "خصم"];
+      const isApprover = ["owner", "hr", "branch_manager", "department_manager"].includes(myRole);
+
+      // Approvers (owner / HR / branch & department managers) get notified about
+      // brand-new requests awaiting their action (but not their own submissions).
+      if (isApprover) {
         newRequests.forEach((req) => {
-          if (["إجازة", "تأخير", "سلفة", "مكافأة", "خصم"].includes(req.type)) {
+          if (requestTypes.includes(req.type) && req.employeePhone !== myPhone) {
             showBrowserNotification("طلب جديد", `${req.employeeName} - ${req.type}`);
+          }
+        });
+      }
+
+      // Everyone (including regular employees) gets notified when the status of
+      // one of THEIR OWN requests changes to approved / rejected.
+      if (myPhone) {
+        nextRequests.forEach((req) => {
+          if (req.employeePhone !== myPhone || !requestTypes.includes(req.type)) return;
+          const prev = prevRequestsById.get(req.id);
+          if (!prev || prev.status === req.status) return;
+          if (req.status === "معتمد") {
+            showBrowserNotification("تحديث على طلبك", `تم اعتماد طلب ${req.type}`);
+          } else if (req.status === "مرفوض") {
+            showBrowserNotification("تحديث على طلبك", `تم رفض طلب ${req.type}`);
           }
         });
       }
@@ -2499,7 +2565,7 @@ useEffect(() => {
       pollingIntervalRef.current = null;
     }
   };
-}, [authUser?.role, cloudEnabled]);
+}, [authUser?.role, authUser?.phone, cloudEnabled]);
 
 useEffect(() => {
   // Note: we intentionally do NOT bail out when cloudStatus === "error".
