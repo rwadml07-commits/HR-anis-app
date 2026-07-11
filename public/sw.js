@@ -38,7 +38,19 @@ self.addEventListener("push", (event) => {
     renotify: Boolean(data.tag),
     data: { url: data.url || "/" },
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    (async () => {
+      // If the app is already open and focused, its in-app poll shows the
+      // notification, so skip the push one to avoid a duplicate. When the app
+      // is closed or backgrounded (the whole point of push), show it.
+      const clientsArr = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+      const isFocused = clientsArr.some(
+        (client) => client.focused || client.visibilityState === "visible"
+      );
+      if (isFocused) return;
+      await self.registration.showNotification(title, options);
+    })()
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {
