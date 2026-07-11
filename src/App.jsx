@@ -443,6 +443,68 @@ function isRemoteSyncEnabled() {
   return Boolean(getSupabaseUrl() && getSupabaseAnonKey());
 }
 
+// Public VAPID key for Web Push. The public key is safe to embed in the client;
+// the matching private key lives only in the Supabase `send-push` edge function
+// secrets. Override per-deployment with VITE_VAPID_PUBLIC_KEY if you rotate keys.
+const DEFAULT_VAPID_PUBLIC_KEY =
+  "BCN-9nMRBUOoFJtqI9DE1sxj43W-DSAfc4hrSzZjZvhy70fX1pYPAmQw0DK1HfM1h_u6fzxzFee81UFcUVdmE6A";
+
+function getVapidPublicKey() {
+  return (
+    (typeof window !== "undefined" && window.localStorage?.getItem("HR_VAPID_PUBLIC_KEY")) ||
+    getViteEnv("VITE_VAPID_PUBLIC_KEY") ||
+    DEFAULT_VAPID_PUBLIC_KEY
+  );
+}
+
+// Web Push requires the application server key as a Uint8Array.
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+// Subscribe this device to Web Push and store the subscription (keyed by its
+// endpoint) in Supabase, tagged with the logged-in user's phone + role so the
+// send-push edge function can target the right recipients. Safe to call
+// repeatedly — it reuses an existing subscription and just refreshes the row.
+async function registerPushSubscription(authUser) {
+  if (typeof window === "undefined" || typeof navigator === "undefined") return;
+  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
+  if (!isRemoteSyncEnabled()) return;
+  try {
+    if (Notification.permission === "default") {
+      await requestBrpZEAWYtiB6bJ16NuLbGCc6CZ6jJdKfb63();
+    }
+    if (Notification.permission !== "granted") return;
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(getVapidPublicKey()),
+      });
+    }
+    const row = {
+      endpoint: subscription.endpoint,
+      subscription: subscription.toJSON(),
+      phone: authUser?.phone || null,
+      role: authUser?.role || null,
+      updated_at: new Date().toISOString(),
+    };
+    await fetch(buildTableRestUrl("hr_push_subscriptions"), {
+      method: "POST",
+      headers: buildSupabaseHeaders({ Prefer: "resolution=merge-duplicates,return=minimal" }),
+      body: JSON.stringify([row]),
+    });
+  } catch (err) {
+    console.warn("Push subscription failed:", err);
+  }
+}
+
 const REMOTE_STATE_TABLE = "hr_app_state";
 const REMOTE_STATE_ROW_ID = "main";
 
@@ -2566,6 +2628,13 @@ useEffect(() => {
     }
   };
 }, [authUser?.role, authUser?.phone, cloudEnabled]);
+
+// Register this device for Web Push once a user is logged in, so notifications
+// (new requests / request status changes) arrive even when the app is closed.
+useEffect(() => {
+  if (!isAuthenticated || !authUser) return;
+  registerPushSubscription(authUser);
+}, [isAuthenticated, authUser?.phone, authUser?.role]);
 
 useEffect(() => {
   // Note: we intentionally do NOT bail out when cloudStatus === "error".
