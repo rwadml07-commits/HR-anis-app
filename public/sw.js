@@ -4,7 +4,7 @@
    Keep it network-first (no offline app caching) so the app always loads the
    latest version after each deploy. */
 
-const SW_VERSION = "anishr-sw-v1";
+const SW_VERSION = "anishr-sw-v2";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -38,19 +38,12 @@ self.addEventListener("push", (event) => {
     renotify: Boolean(data.tag),
     data: { url: data.url || "/" },
   };
-  event.waitUntil(
-    (async () => {
-      // If the app is already open and focused, its in-app poll shows the
-      // notification, so skip the push one to avoid a duplicate. When the app
-      // is closed or backgrounded (the whole point of push), show it.
-      const clientsArr = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      const isFocused = clientsArr.some(
-        (client) => client.focused || client.visibilityState === "visible"
-      );
-      if (isFocused) return;
-      await self.registration.showNotification(title, options);
-    })()
-  );
+  // iOS/Safari requirement: EVERY push event must display a notification,
+  // otherwise the platform may throttle or revoke the push subscription.
+  // So we always show it. (A brief duplicate with the in-app poll when the app
+  // happens to be open is an acceptable trade-off for reliable delivery when
+  // the app is closed — which is the whole point of push.)
+  event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener("notificationclick", (event) => {
