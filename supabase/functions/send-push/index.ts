@@ -4,13 +4,17 @@
 // It figures out WHO should be notified for the request's CURRENT stage and
 // delivers a Web Push message only to those people (targeted, not broadcast).
 //
-// Approval flow (leave): dept manager -> HR -> owner -> (decision).
-// Each stage notifies only the person whose turn it is:
-//   بانتظار مدير الإدارة  -> the department manager of that department
-//   بانتظار HR / مرتجع لـ HR -> HR
+// Who gets notified (mirrors who can actually ACT in the app):
+//   بانتظار مدير الإدارة   -> dept manager(s) of that department
+//                             (fallback: HR + owner — they can act when a
+//                              department has no manager, so requests never
+//                              go silent)
+//   بانتظار HR / مرتجع لـ HR -> HR (fallback: owner)
 //   بانتظار المالك          -> owner
-//   بانتظار الاعتماد (مالية) -> HR + owner
-//   بانتظار الاعتماد (تأخير) -> the department manager of that department
+//   بانتظار الاعتماد (سلفة/مكافأة/خصم) -> HR + owner
+//   بانتظار الاعتماد (تأخير) -> dept manager(s) of that department + branch
+//                              managers + HR + owner (single-stage approval:
+//                              anyone of them can decide, so all are notified)
 //   معتمد / مرفوض / بانتظار رد الموظف -> the request owner (employee)
 //
 // Required secrets:
@@ -44,6 +48,8 @@ const STATUS = {
   REJECTED: "مرفوض",
 };
 
+type HrUser = { role?: string; phone?: string; managedDepartment?: string };
+
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -51,32 +57,45 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
-// Decide whether a given system user should be notified for this request stage.
-function isTargetApprover(
-  user: { role?: string; managedDepartment?: string },
-  status: string,
-  reqType: string,
-  reqDepartment: string,
-): boolean {
-  const role = user.role;
-  const managesThisDept =
-    role === "department_manager" &&
-    (user.managedDepartment === reqDepartment || user.managedDepartment === "all");
+function norm(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+// Same matching rule the app uses (inManagedDepartment): a department manager
+// matches if their managedDepartment equals the request's managerDepartment OR
+// its department (trimmed), or if they manage "all".
+function managesRequestDept(user: HrUser, reqManagerDept: string, reqDept: string): boolean {
+  if (user.role !== "department_manager") return false;
+  const md = norm(user.managedDepartment);
+  if (!md) return false;
+  if (md === "all") return true;
+  return (reqManagerDept !== "" && md === reqManagerDept) || (reqDept !== "" && md === reqDept);
+}
+
+// Decide the list of users to notify for an approval stage.
+function pickApprovers(users: HrUser[], status: string, reqType: string, reqManagerDept: string, reqDept: string): HrUser[] {
+  const deptManagers = users.filter((u) => managesRequestDept(u, reqManagerDept, reqDept));
+  const hr = users.filter((u) => u.role === "hr");
+  const owners = users.filter((u) => u.role === "owner");
+  const branchManagers = users.filter((u) => u.role === "branch_manager");
 
   switch (status) {
     case STATUS.PENDING_DEPT:
-      return managesThisDept;
+      // In-app, HR/owner may act at the dept stage when a department has no
+      // manager — notify them instead so the request never goes silent.
+      return deptManagers.length ? deptManagers : [...hr, ...owners];
     case STATUS.PENDING_HR:
     case STATUS.RETURNED_HR:
-      return role === "hr";
+      return hr.length ? hr : owners;
     case STATUS.PENDING_OWNER:
-      return role === "owner";
+      return owners;
     case STATUS.PENDING_GENERIC:
-      if (FINANCIAL_TYPES.includes(reqType)) return role === "hr" || role === "owner";
-      // تأخير and any other non-financial generic-pending request.
-      return managesThisDept;
+      if (FINANCIAL_TYPES.includes(reqType)) return [...hr, ...owners];
+      // تأخير (and any other single-stage request): dept manager, branch
+      // managers, HR and owner can all decide it in the app — notify them all.
+      return [...deptManagers, ...branchManagers, ...hr, ...owners];
     default:
-      return false;
+      return [];
   }
 }
 
@@ -104,7 +123,8 @@ Deno.serve(async (req) => {
     }
 
     const reqType: string = data.type;
-    const reqDepartment: string = data.managerDepartment || data.department || "";
+    const reqManagerDept = norm(data.managerDepartment);
+    const reqDept = norm(data.department);
 
     let title = "";
     let body = "";
@@ -130,18 +150,16 @@ Deno.serve(async (req) => {
       if (data.employeePhone) targetPhones = [String(data.employeePhone)];
     } else {
       // An approval stage -> notify only the person(s) whose turn it is.
-      // Look them up in hr_users so we can match department managers by dept.
       const { data: userRows, error: usersErr } = await supabase
         .from("hr_users")
         .select("data");
       if (usersErr) throw usersErr;
 
       const users = (userRows || [])
-        .map((r: { data: unknown }) => r.data as { role?: string; phone?: string; managedDepartment?: string })
+        .map((r: { data: unknown }) => r.data as HrUser)
         .filter(Boolean);
 
-      targetPhones = users
-        .filter((u) => isTargetApprover(u, newStatus, reqType, reqDepartment))
+      targetPhones = pickApprovers(users, newStatus, reqType, reqManagerDept, reqDept)
         .map((u) => String(u.phone || ""))
         .filter(Boolean);
 
@@ -153,7 +171,7 @@ Deno.serve(async (req) => {
     targetPhones = Array.from(new Set(targetPhones));
 
     if (!targetPhones.length) {
-      console.log("skip: no target recipients, status=", newStatus, "type=", reqType, "dept=", reqDepartment);
+      console.log("skip: no target recipients, status=", newStatus, "type=", reqType, "dept=", reqManagerDept || reqDept);
       return jsonResponse({ skipped: "no target recipients" });
     }
 
@@ -165,7 +183,7 @@ Deno.serve(async (req) => {
 
     console.log(
       "send-push:", eventType, "status=", newStatus, "type=", reqType,
-      "dept=", reqDepartment, "targets=", JSON.stringify(targetPhones),
+      "dept=", reqManagerDept || reqDept, "targets=", JSON.stringify(targetPhones),
       "subscriptions=", subs?.length || 0,
     );
 
@@ -174,14 +192,20 @@ Deno.serve(async (req) => {
     const results = await Promise.allSettled(
       (subs || []).map(async (s: { endpoint: string; subscription: unknown }) => {
         try {
-          await webpush.sendNotification(s.subscription as webpush.PushSubscription, message);
+          // Urgency high so Android delivers promptly even in battery saver.
+          await webpush.sendNotification(s.subscription as webpush.PushSubscription, message, {
+            urgency: "high",
+          });
           console.log("push OK:", String(s.endpoint).slice(0, 45));
         } catch (err) {
           const statusCode = (err as { statusCode?: number })?.statusCode;
           const errBody = (err as { body?: string })?.body;
           console.log("push FAIL:", String(s.endpoint).slice(0, 45), "status=", statusCode, "body=", errBody, "msg=", String(err));
-          // 404/410 mean the subscription is gone — clean it up.
-          if (statusCode === 404 || statusCode === 410) {
+          // 404/410 = subscription is gone. 403 = subscription was created
+          // with a DIFFERENT VAPID key (pre-rotation) and can never work with
+          // ours. Either way the row is dead weight — remove it; the device
+          // re-registers with the current key next time the app is opened.
+          if (statusCode === 404 || statusCode === 410 || statusCode === 403) {
             await supabase.from("hr_push_subscriptions").delete().eq("endpoint", s.endpoint);
           }
           throw err;

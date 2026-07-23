@@ -350,6 +350,8 @@ const emptyForm = {
   location: "",
   phone: "",
   email: "",
+  qualification: "",
+  residenceLocation: "",
   description: "",
   basicSalary: "",
   salary: "",
@@ -450,11 +452,9 @@ const DEFAULT_VAPID_PUBLIC_KEY =
   "BCN-9nMRBUOoFJtqI9DE1sxj43W-DSAfc4hrSzZjZvhy70fX1pYPAmQw0DK1HfM1h_u6fzxzFee81UFcUVdmE6A";
 
 function getVapidPublicKey() {
-  return (
-    (typeof window !== "undefined" && window.localStorage?.getItem("HR_VAPID_PUBLIC_KEY")) ||
-    getViteEnv("VITE_VAPID_PUBLIC_KEY") ||
-    DEFAULT_VAPID_PUBLIC_KEY
-  );
+  // Note: no localStorage override here on purpose — a stale key cached on one
+  // device would silently break push for that device after a key rotation.
+  return getViteEnv("VITE_VAPID_PUBLIC_KEY") || DEFAULT_VAPID_PUBLIC_KEY;
 }
 
 // Web Push requires the application server key as a Uint8Array.
@@ -481,11 +481,42 @@ async function registerPushSubscription(authUser) {
     }
     if (Notification.permission !== "granted") return;
     const registration = await navigator.serviceWorker.ready;
+    const applicationServerKey = urlBase64ToUint8Array(getVapidPublicKey());
     let subscription = await registration.pushManager.getSubscription();
+    // If this device subscribed with an OLD VAPID key (before a key rotation),
+    // the server can never deliver to it — every push fails with 403 and the
+    // user sees "no notifications when the app is closed". Detect the mismatch
+    // and re-subscribe with the current key.
+    if (subscription) {
+      const existingKeyBuf = subscription.options?.applicationServerKey || null;
+      const existingKey = existingKeyBuf ? new Uint8Array(existingKeyBuf) : null;
+      const sameKey =
+        !!existingKey &&
+        existingKey.length === applicationServerKey.length &&
+        existingKey.every((byte, i) => byte === applicationServerKey[i]);
+      if (!sameKey) {
+        const staleEndpoint = subscription.endpoint;
+        try {
+          await subscription.unsubscribe();
+        } catch {
+          /* ignore — we resubscribe below either way */
+        }
+        // Drop the dead row so the server stops trying (and failing) to push to it.
+        try {
+          await fetch(
+            buildTableRestUrl("hr_push_subscriptions", `?endpoint=eq.${encodeURIComponent(staleEndpoint)}`),
+            { method: "DELETE", headers: buildSupabaseHeaders({ Prefer: "return=minimal" }) }
+          );
+        } catch {
+          /* non-fatal — server also cleans up on push failure */
+        }
+        subscription = null;
+      }
+    }
     if (!subscription) {
       subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(getVapidPublicKey()),
+        applicationServerKey,
       });
     }
     const row = {
@@ -1693,6 +1724,25 @@ function Field({ label, children, full = false }) {
       <label style={ui.label}>{label}</label>
       {children}
     </div>
+  );
+}
+
+// Renders the employee residence value: plain text as-is, but if it's a URL
+// (Google Maps or any map link) show a clickable "open on map" link instead.
+function ResidenceValue({ value, language }) {
+  const raw = String(value || "").trim();
+  if (!raw) return "-";
+  if (!/^(https?:\/\/|www\.)/i.test(raw)) return raw;
+  const href = /^www\./i.test(raw) ? `https://${raw}` : raw;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      style={{ color: "#60a5fa", textDecoration: "underline", wordBreak: "break-all" }}
+    >
+      {language === "ar" ? "فتح الموقع على الخريطة 📍" : "Open location on map 📍"}
+    </a>
   );
 }
 
@@ -6104,6 +6154,8 @@ useEffect(() => {
       location: form.location,
       phone: form.phone,
       email: form.email,
+      qualification: String(form.qualification || "").trim(),
+      residenceLocation: String(form.residenceLocation || "").trim(),
       description: form.description,
       basicSalary: Number(form.basicSalary || form.salary || 0),
       salary: Number(form.salary || 0),
@@ -6283,6 +6335,8 @@ useEffect(() => {
       location: employee.location || "",
       phone: employee.phone || "",
       email: employee.email || "",
+      qualification: employee.qualification || "",
+      residenceLocation: employee.residenceLocation || "",
       description: employee.description || "",
       basicSalary: String(employee.basicSalary || employee.salary || ""),
       salary: String(employee.salary || ""),
@@ -6329,6 +6383,8 @@ useEffect(() => {
             location: editForm.location,
             phone: editForm.phone,
             email: editForm.email,
+            qualification: String(editForm.qualification || "").trim(),
+            residenceLocation: String(editForm.residenceLocation || "").trim(),
             description: editForm.description,
             basicSalary: Number(editForm.basicSalary || editForm.salary || 0),
             salary: Number(editForm.salary || 0),
@@ -8732,6 +8788,10 @@ useEffect(() => {
                       <div style={{ ...ui.employeeCvVal, ...(isMobileView ? ui.employeeCvValMobile : {}) }}>{filteredEmployees[0].managerDepartment || "-"}</div>
                     </div>
                     <div style={{ ...ui.employeeCvRow, ...(isMobileView ? ui.employeeCvRowMobile : {}) }}>
+                      <div style={{ ...ui.employeeCvKey, ...(isMobileView ? ui.employeeCvKeyMobile : {}) }}>{language === "ar" ? "المؤهل العلمي" : "Qualification"}</div>
+                      <div style={{ ...ui.employeeCvVal, ...(isMobileView ? ui.employeeCvValMobile : {}) }}>{filteredEmployees[0].qualification || "-"}</div>
+                    </div>
+                    <div style={{ ...ui.employeeCvRow, ...(isMobileView ? ui.employeeCvRowMobile : {}) }}>
                       <div style={{ ...ui.employeeCvKey, ...(isMobileView ? ui.employeeCvKeyMobile : {}) }}>{language === "ar" ? "المرتب الأساسي" : "Basic Salary"}</div>
                       <div style={{ ...ui.employeeCvVal, ...(isMobileView ? ui.employeeCvValMobile : {}) }}>{currency(filteredEmployees[0].basicSalary || filteredEmployees[0].salary || 0)}</div>
                     </div>
@@ -8779,6 +8839,13 @@ useEffect(() => {
                       <div>
                         <div style={{ ...ui.employeeCvContactValue, ...(isMobileView ? ui.employeeCvContactValueMobile : {}) }}>{filteredEmployees[0].location || filteredEmployees[0].branch || "-"}</div>
                         <div style={ui.employeeCvContactSub}>{language === "ar" ? "الفرع" : "Branch"}</div>
+                      </div>
+                    </div>
+                    <div style={{ ...ui.employeeCvContactItem, ...(isMobileView ? ui.employeeCvContactItemMobile : {}) }}>
+                      <span style={{ ...ui.employeeCvContactIcon, ...(isMobileView ? ui.employeeCvContactIconMobile : {}) }}>🏠</span>
+                      <div>
+                        <div style={{ ...ui.employeeCvContactValue, ...(isMobileView ? ui.employeeCvContactValueMobile : {}) }}><ResidenceValue value={filteredEmployees[0].residenceLocation} language={language} /></div>
+                        <div style={ui.employeeCvContactSub}>{language === "ar" ? "موقع السكن" : "Residence"}</div>
                       </div>
                     </div>
                     <div style={{ ...ui.employeeCvContactItem, ...(isMobileView ? ui.employeeCvContactItemMobile : {}) }}>
@@ -9068,6 +9135,8 @@ useEffect(() => {
             </Select>
           </Field>
           <Field label={t.email}><Input value={form.email} onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))} /></Field>
+          <Field label={language === "ar" ? "المؤهل العلمي" : "Educational Qualification"}><Input value={form.qualification} onChange={(e) => setForm((p) => ({ ...p, qualification: e.target.value }))} placeholder={language === "ar" ? "مثال: بكالوريوس محاسبة" : "e.g. BSc Accounting"} /></Field>
+          <Field label={language === "ar" ? "موقع السكن (نص أو رابط خريطة)" : "Residence (text or map link)"}><Input value={form.residenceLocation} onChange={(e) => setForm((p) => ({ ...p, residenceLocation: e.target.value }))} placeholder={language === "ar" ? "عنوان السكن أو رابط من قوقل ماب" : "Address or Google Maps link"} /></Field>
           <Field label={t.basicSalary}><Input type="number" value={form.basicSalary} onChange={(e) => setForm((p) => ({ ...p, basicSalary: e.target.value }))} /></Field>
           <Field label={t.leaveBalance}><Input type="number" value={form.leaveBalance} onChange={(e) => setForm((p) => ({ ...p, leaveBalance: e.target.value }))} /></Field>
           <Field label={t.leaveAccrualMode}>
@@ -9162,6 +9231,8 @@ useEffect(() => {
             </Select>
           </Field>
           <Field label={t.email}><Input value={editForm.email} onChange={(e) => setEditForm((p) => ({ ...p, email: e.target.value }))} /></Field>
+          <Field label={language === "ar" ? "المؤهل العلمي" : "Educational Qualification"}><Input value={editForm.qualification} onChange={(e) => setEditForm((p) => ({ ...p, qualification: e.target.value }))} placeholder={language === "ar" ? "مثال: بكالوريوس محاسبة" : "e.g. BSc Accounting"} /></Field>
+          <Field label={language === "ar" ? "موقع السكن (نص أو رابط خريطة)" : "Residence (text or map link)"}><Input value={editForm.residenceLocation} onChange={(e) => setEditForm((p) => ({ ...p, residenceLocation: e.target.value }))} placeholder={language === "ar" ? "عنوان السكن أو رابط من قوقل ماب" : "Address or Google Maps link"} /></Field>
           <Field label={t.basicSalary}><Input type="number" value={editForm.basicSalary} onChange={(e) => setEditForm((p) => ({ ...p, basicSalary: e.target.value }))} /></Field>
           <Field label={t.leaveBalance}><Input type="number" value={editForm.leaveBalance} onChange={(e) => setEditForm((p) => ({ ...p, leaveBalance: e.target.value }))} /></Field>
           <Field label={t.leaveAccrualMode}>
@@ -9616,6 +9687,10 @@ useEffect(() => {
                   <div style={{ ...ui.employeeCvVal, ...(isMobileView ? ui.employeeCvValMobile : {}) }}>{selectedEmployee.managerDepartment || "-"}</div>
                 </div>
                 <div style={{ ...ui.employeeCvRow, ...(isMobileView ? ui.employeeCvRowMobile : {}) }}>
+                  <div style={{ ...ui.employeeCvKey, ...(isMobileView ? ui.employeeCvKeyMobile : {}) }}>{language === "ar" ? "المؤهل العلمي" : "Qualification"}</div>
+                  <div style={{ ...ui.employeeCvVal, ...(isMobileView ? ui.employeeCvValMobile : {}) }}>{selectedEmployee.qualification || "-"}</div>
+                </div>
+                <div style={{ ...ui.employeeCvRow, ...(isMobileView ? ui.employeeCvRowMobile : {}) }}>
                   <div style={{ ...ui.employeeCvKey, ...(isMobileView ? ui.employeeCvKeyMobile : {}) }}>{language === "ar" ? "المرتب الأساسي" : "Basic Salary"}</div>
                   <div style={{ ...ui.employeeCvVal, ...(isMobileView ? ui.employeeCvValMobile : {}) }}>{currency(selectedEmployee.basicSalary || selectedEmployee.salary || 0)}</div>
                 </div>
@@ -9670,6 +9745,13 @@ useEffect(() => {
                   <div>
                     <div style={{ ...ui.employeeCvContactValue, ...(isMobileView ? ui.employeeCvContactValueMobile : {}) }}>{selectedEmployee.location || selectedEmployee.branch || "-"}</div>
                     <div style={ui.employeeCvContactSub}>{language === "ar" ? "الفرع" : "Branch"}</div>
+                  </div>
+                </div>
+                <div style={{ ...ui.employeeCvContactItem, ...(isMobileView ? ui.employeeCvContactItemMobile : {}) }}>
+                  <span style={{ ...ui.employeeCvContactIcon, ...(isMobileView ? ui.employeeCvContactIconMobile : {}) }}>🏠</span>
+                  <div>
+                    <div style={{ ...ui.employeeCvContactValue, ...(isMobileView ? ui.employeeCvContactValueMobile : {}) }}><ResidenceValue value={selectedEmployee.residenceLocation} language={language} /></div>
+                    <div style={ui.employeeCvContactSub}>{language === "ar" ? "موقع السكن" : "Residence"}</div>
                   </div>
                 </div>
                 <div style={{ ...ui.employeeCvContactItem, ...(isMobileView ? ui.employeeCvContactItemMobile : {}) }}>
