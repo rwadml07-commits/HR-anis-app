@@ -104,6 +104,11 @@ const STORAGE_KEYS = {
   feedback: "hr_feedback_v13",
 };
 
+// Persisted login session: phone only — NEVER the password. The account is
+// re-validated against the users list on every restore, so a deleted account
+// cannot get back in, while a refresh / reopening the PWA stays signed in.
+const AUTH_SESSION_KEY = "hr_auth_session_v1";
+
 const BRANCH_OPTIONS = ["المركزية", "الجبل الاخضر", "الغربية", "الوسطى", "بنغازي", "طرابلس", "فزان"];
 
 const initialEmployees = [
@@ -2685,6 +2690,40 @@ useEffect(() => {
   if (!isAuthenticated || !authUser) return;
   registerPushSubscription(authUser);
 }, [isAuthenticated, authUser?.phone, authUser?.role]);
+
+// Auto-restore the last session so refreshing or reopening the PWA doesn't ask
+// for credentials every time. Mirrors handleLogin: waits for the cloud users
+// list (except the recovery account), re-validates the saved phone against it,
+// and clears the stored session if the account no longer exists.
+useEffect(() => {
+  if (isAuthenticated) return;
+  let saved = null;
+  try {
+    saved = JSON.parse(window.localStorage.getItem(AUTH_SESSION_KEY) || "null");
+  } catch {
+    saved = null;
+  }
+  const savedPhone = String(saved?.phone || "").trim();
+  if (!savedPhone) return;
+  const isProgrammerSession = savedPhone === String(PROGRAMMER_ACCOUNT_PHONE).trim();
+  if (cloudEnabled && !remoteReadyRef.current && !isProgrammerSession) return; // wait for cloud users
+  const match = mergeSystemUsersWithHiddenAccounts(systemUsers).find(
+    (user) => String(user.phone || "").trim() === savedPhone
+  );
+  if (match) {
+    setIsAuthenticated(true);
+    setAuthUser(match);
+    setSystemUsers((prev) => mergeSystemUsersWithHiddenAccounts(prev));
+    if (match.mustChangePassword && !match.passwordChangedOnce) {
+      setTimeout(() => openPasswordDialog(), 150);
+    }
+  } else if (!cloudEnabled || remoteReadyRef.current) {
+    // Cloud data is in and the account is gone — drop the stored session.
+    try {
+      window.localStorage.removeItem(AUTH_SESSION_KEY);
+    } catch { /* ignore */ }
+  }
+}, [isAuthenticated, systemUsers, cloudEnabled]);
 
 useEffect(() => {
   // Note: we intentionally do NOT bail out when cloudStatus === "error".
@@ -5687,12 +5726,19 @@ useEffect(() => {
     setAuthUser(matchedUser);
     setSystemUsers((prev) => mergeSystemUsersWithHiddenAccounts(prev));
     setLoginError("");
+    // Keep the session across refreshes / app restarts (phone only, no password).
+    try {
+      window.localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({ phone: matchedUser.phone, savedAt: new Date().toISOString() }));
+    } catch { /* private mode — session just won't persist */ }
     if (matchedUser.mustChangePassword && !matchedUser.passwordChangedOnce) {
       setTimeout(() => openPasswordDialog(), 150);
     }
   };
 
   const handleLogout = () => {
+    try {
+      window.localStorage.removeItem(AUTH_SESSION_KEY);
+    } catch { /* ignore */ }
     setIsAuthenticated(false);
     setAuthUser(null);
     setLoginData({ phone: "", password: "" });
