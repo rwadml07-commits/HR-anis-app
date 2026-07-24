@@ -836,39 +836,67 @@ function sanitizeRemoteState(payload) {
   };
 }
 
+// Collision-resistant record id. A bare Date.now() collides when two records
+// are created in the same millisecond (bulk attendance, two devices), and the
+// merge-duplicates cloud upsert keys on id, so a collision silently loses a
+// record. The per-call counter guarantees uniqueness within a session/burst
+// while staying a safe integer (Date.now()*1000 ≈ 1.75e15 < 2^53).
+let __idSeq = 0;
+function uniqueId() {
+  __idSeq = (__idSeq + 1) % 1000;
+  return Date.now() * 1000 + __idSeq;
+}
+
+// The viewer's local calendar date as "YYYY-MM-DD" (not UTC — avoids the
+// toISOString() off-by-one in UTC+ timezones like Libya).
+function localDateKey(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 // Computes how many leave days to add for an auto-accrual employee based on
 // how many full periods (day/week/month) have passed since the last accrual.
 // Returns { daysToAdd, newLastApplied } or null if nothing to add.
+//
+// BUGFIX: previously the "last applied" date was parsed at LOCAL midnight but
+// written back with toISOString() (UTC). In UTC+ timezones that shifts the
+// stored date one day BACKWARD every run, so a "daily" accrual re-fired every
+// hour forever. Both the arithmetic and the written-back date now use a single
+// UTC-midnight anchor, so the date advances correctly and only once per period.
 function computeLeaveAccrual(employee, today = new Date()) {
   if (!employee || employee.leaveAccrualMode !== "auto") return null;
   const amount = Number(employee.leaveAccrualAmount || 0);
   if (amount <= 0) return null;
   const period = employee.leaveAccrualPeriod || "monthly";
+  const todayKey = localDateKey(today);
   const lastStr = employee.leaveAccrualLastApplied;
   if (!lastStr) {
-    return { daysToAdd: 0, newLastApplied: today.toISOString().slice(0, 10) };
+    return { daysToAdd: 0, newLastApplied: todayKey };
   }
-  const last = new Date(lastStr + "T00:00:00");
+  const last = new Date(lastStr + "T00:00:00Z");        // UTC anchor
+  const todayUTC = new Date(todayKey + "T00:00:00Z");   // UTC anchor of local date
   if (isNaN(last.getTime())) {
-    return { daysToAdd: 0, newLastApplied: today.toISOString().slice(0, 10) };
+    return { daysToAdd: 0, newLastApplied: todayKey };
   }
   let periods = 0;
   let newLast = new Date(last);
   if (period === "daily") {
     const msPerDay = 24 * 60 * 60 * 1000;
-    periods = Math.floor((today - last) / msPerDay);
-    newLast = new Date(last.getTime() + periods * msPerDay);
+    periods = Math.floor((todayUTC - last) / msPerDay);
+    newLast = new Date(last.getTime() + Math.max(0, periods) * msPerDay);
   } else if (period === "weekly") {
     const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-    periods = Math.floor((today - last) / msPerWeek);
-    newLast = new Date(last.getTime() + periods * msPerWeek);
+    periods = Math.floor((todayUTC - last) / msPerWeek);
+    newLast = new Date(last.getTime() + Math.max(0, periods) * msPerWeek);
   } else {
-    // monthly: count whole calendar months elapsed
-    periods = (today.getFullYear() - last.getFullYear()) * 12 + (today.getMonth() - last.getMonth());
-    if (today.getDate() < last.getDate()) periods -= 1;
+    // monthly: count whole calendar months elapsed (all in UTC)
+    periods = (todayUTC.getUTCFullYear() - last.getUTCFullYear()) * 12 + (todayUTC.getUTCMonth() - last.getUTCMonth());
+    if (todayUTC.getUTCDate() < last.getUTCDate()) periods -= 1;
     if (periods < 0) periods = 0;
     newLast = new Date(last);
-    newLast.setMonth(newLast.getMonth() + periods);
+    newLast.setUTCMonth(newLast.getUTCMonth() + periods);
   }
   if (periods <= 0) return null;
   return { daysToAdd: amount * periods, newLastApplied: newLast.toISOString().slice(0, 10) };
@@ -1321,6 +1349,19 @@ function toNumber(value) {
 }
 
 
+// Interprets a numeric date as day-first (DD/MM/YYYY — the Libyan convention),
+// falling back to month-first only when the numbers force it (e.g. 07/24 must
+// be MM/DD). Returns "" for impossible dates so callers can flag them instead
+// of silently producing an invalid month like "2026-24-07".
+function dayFirstToIso(a, b, year) {
+  let day, month;
+  if (a > 12 && b <= 12) { day = a; month = b; }        // clearly DD/MM
+  else if (b > 12 && a <= 12) { month = a; day = b; }   // clearly MM/DD
+  else { day = a; month = b; }                          // ambiguous → day-first
+  if (month < 1 || month > 12 || day < 1 || day > 31) return "";
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 function normalizeDateString(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -1335,16 +1376,10 @@ function normalizeDateString(value) {
     return `${year}-${month}-${day}`;
   }
 
-  const monthDayYearMatch = raw.match(/(\d{1,2})[^\d]+(\d{1,2})[^\d]+(\d{4})/);
-  if (monthDayYearMatch) {
-    const first = Number(monthDayYearMatch[1]);
-    const second = Number(monthDayYearMatch[2]);
-    const year = monthDayYearMatch[3];
-    const month = String(first).padStart(2, "0");
-    const day = String(second).padStart(2, "0");
-    if (first >= 1 && first <= 12 && second >= 1 && second <= 31) {
-      return `${year}-${month}-${day}`;
-    }
+  const dayMonthYearMatch = raw.match(/(\d{1,2})[^\d]+(\d{1,2})[^\d]+(\d{4})/);
+  if (dayMonthYearMatch) {
+    const iso = dayFirstToIso(Number(dayMonthYearMatch[1]), Number(dayMonthYearMatch[2]), dayMonthYearMatch[3]);
+    if (iso) return iso;
   }
 
   const digits = raw.replace(/[^0-9]/g, "");
@@ -1368,6 +1403,18 @@ function timeToMinutes(value) {
   return Number(match[1]) * 60 + Number(match[2]);
 }
 
+// Late minutes = how far AFTER the planned start the punch is. Uses a circular
+// (mod-24h) difference so overnight shifts work: a shift starting 22:00 with a
+// 00:40 punch is 160 min late (not 0), and a shift starting 00:30 with a 23:50
+// punch is early (not 1400 min late). Assumes the punch is within ±12h of plan.
+function computeDelayMinutes(plannedInMinutes, actualInMinutes) {
+  if (plannedInMinutes == null || actualInMinutes == null) return 0;
+  let diff = actualInMinutes - plannedInMinutes;
+  if (diff > 720) diff -= 1440;   // wrapped before midnight → actually early
+  if (diff < -720) diff += 1440;  // wrapped after midnight → actually late
+  return Math.max(0, diff);
+}
+
 function minutesToClock(totalMinutes) {
   if (totalMinutes == null || Number.isNaN(totalMinutes)) return "-";
   const safe = Math.max(0, Number(totalMinutes || 0));
@@ -1384,12 +1431,8 @@ function normalizeUploadedDate(value) {
 
   const slashMatch = raw.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
   if (slashMatch) {
-    const first = Number(slashMatch[1]);
-    const second = Number(slashMatch[2]);
-    const year = slashMatch[3];
-    const month = String(first).padStart(2, "0");
-    const day = String(second).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    // Day-first (Libyan), same rule as normalizeDateString.
+    return dayFirstToIso(Number(slashMatch[1]), Number(slashMatch[2]), slashMatch[3]);
   }
 
   return "";
@@ -1806,6 +1849,10 @@ export default function HRManagementApp() {
   const lastSyncedSnapshotRef = useRef(null);
   const lastSyncSignatureRef = useRef("");
   const notificationPermissionRef = useRef("default");
+  // Always-current mirror of authUser so background sync (whose closures can be
+  // stale) compares against the live session — avoids logging a user out right
+  // after they change their own password.
+  const authUserRef = useRef(null);
 
   const [language, setLanguage] = useState(savedSettings.language || "ar");
   const [themeMode, setThemeMode] = useState(savedSettings.theme || "light");
@@ -2047,7 +2094,9 @@ export default function HRManagementApp() {
     applyingRemoteRef.current = true;
     setEmployees(normalizeEmployeesCollection(next.employees));
     setRequests(next.requests);
-    setSystemUsers(mergeSystemUsersWithHiddenAccounts(next.users));
+    const mergedUsers = mergeSystemUsersWithHiddenAccounts(next.users);
+    setSystemUsers(mergedUsers);
+    reconcileAuthUserFromCloud(mergedUsers);
     setPendingAccounts(next.pending);
     setUpgradeRequests(next.upgrades);
     setComplaints(next.complaints);
@@ -2061,6 +2110,37 @@ export default function HRManagementApp() {
     window.setTimeout(() => {
       applyingRemoteRef.current = false;
     }, 0);
+  };
+
+  // Keep the logged-in session honest against the cloud on every pull:
+  //  - account deleted        -> log out
+  //  - password changed elsewhere -> log out (session no longer valid)  [#19]
+  //  - role/department/branch/name changed -> update the live session   [#9]
+  // Without this, a demoted user keeps approving until they manually reload.
+  const reconcileAuthUserFromCloud = (cloudUsers) => {
+    const current = authUserRef.current;
+    if (!current) return;
+    const me = (Array.isArray(cloudUsers) ? cloudUsers : []).find(
+      (u) => String(u.phone || "") === String(current.phone || "")
+    );
+    if (!me) {
+      // Account no longer exists in the cloud → end the session.
+      handleLogout();
+      return;
+    }
+    if (String(me.password || "") !== String(current.password || "")) {
+      // Password was changed on another device → this session is stale.
+      handleLogout();
+      return;
+    }
+    const changed =
+      String(me.role || "") !== String(current.role || "") ||
+      String(me.managedDepartment || "") !== String(current.managedDepartment || "") ||
+      String(me.managedBranch || "") !== String(current.managedBranch || "") ||
+      String(me.name || "") !== String(current.name || "");
+    if (changed) {
+      setAuthUser((prev) => (prev ? { ...prev, role: me.role, managedDepartment: me.managedDepartment, managedBranch: me.managedBranch, name: me.name } : prev));
+    }
   };
 
   const buildCurrentRemoteSnapshot = () =>
@@ -2077,7 +2157,26 @@ export default function HRManagementApp() {
       attendanceReports: readStorage(STORAGE_KEYS.attendanceReports, [], isArray),
     });
 
-  const forceRemoteSaveSnapshot = async (snapshotOverride = null) => {
+  // Preserve every user's CLOUD password + lifecycle flags on save, EXCEPT the
+  // phones explicitly being changed (writeUsersFor). This is what stops a stale
+  // device from reverting a password/role changed on another device. Only does
+  // the extra fetch when a user record actually changed vs the last sync (most
+  // saves change requests/employees, not users, so they skip it).
+  const guardUserCredentialsForSave = async (snapshot, writeUsersFor = []) => {
+    const users = Array.isArray(snapshot?.users) ? snapshot.users : [];
+    if (!users.length) return snapshot;
+    const prevUsers = Array.isArray(lastSyncedSnapshotRef.current?.users) ? lastSyncedSnapshotRef.current.users : [];
+    if (stableStringify(users) === stableStringify(prevUsers)) return snapshot; // no user changed
+    let cloudUsers = prevUsers;
+    try {
+      const rows = await fetchTableRows("hr_users");
+      const fresh = rows.map((r) => r.data).filter(Boolean);
+      if (fresh.length) cloudUsers = fresh;
+    } catch { /* offline / failed — fall back to last-synced cloud users */ }
+    return { ...snapshot, users: mergeUsersForPush(users, cloudUsers, writeUsersFor) };
+  };
+
+  const forceRemoteSaveSnapshot = async (snapshotOverride = null, options = {}) => {
     if (!cloudEnabled || applyingRemoteRef.current) return;
     // CRITICAL: never write before the first successful load, so a save right
     // after deploy can't overwrite real cloud data with default seed data.
@@ -2085,7 +2184,8 @@ export default function HRManagementApp() {
       console.warn("Skipped cloud save: remote not ready yet (protecting cloud data).");
       return;
     }
-    const snapshot = sanitizeRemoteState(snapshotOverride || buildCurrentRemoteSnapshot());
+    const base = sanitizeRemoteState(snapshotOverride || buildCurrentRemoteSnapshot());
+    const snapshot = await guardUserCredentialsForSave(base, options.writeUsersFor || []);
     try {
       setCloudStatus("syncing");
       // Diff-based write: only the records that actually changed are written, so
@@ -2128,7 +2228,9 @@ export default function HRManagementApp() {
     if (!cloudEnabled || applyingRemoteRef.current || !remoteReadyRef.current) return;
     try {
       setCloudStatus("syncing");
-      const safeSnapshot = sanitizeRemoteState(snapshot);
+      // Routine auto-save never changes credentials (writeUsersFor = []), so any
+      // user record it touches keeps the cloud password.
+      const safeSnapshot = await guardUserCredentialsForSave(sanitizeRemoteState(snapshot), []);
       await syncSnapshotToTables(safeSnapshot, lastSyncedSnapshotRef.current || {});
       lastSyncedSnapshotRef.current = safeSnapshot;
       lastSyncSignatureRef.current = stableStringify(safeSnapshot);
@@ -2684,6 +2786,12 @@ useEffect(() => {
   };
 }, [authUser?.role, authUser?.phone, cloudEnabled]);
 
+// Mirror authUser into a ref so background sync always compares against the
+// live session (its own closures may be stale).
+useEffect(() => {
+  authUserRef.current = authUser;
+}, [authUser]);
+
 // Register this device for Web Push once a user is logged in, so notifications
 // (new requests / request status changes) arrive even when the app is closed.
 useEffect(() => {
@@ -2939,7 +3047,7 @@ useEffect(() => {
       const actualInMinutes = timeToMinutes(approvedLate?.lateTo || emp.fromHour);
       // Hourly (flexible) employees have no fixed arrival time, so no late minutes.
       const isHourly = emp.shift === "hourly";
-      const delayMinutes = isHourly ? 0 : (plannedInMinutes != null && actualInMinutes != null ? Math.max(0, actualInMinutes - plannedInMinutes) : 0);
+      const delayMinutes = isHourly ? 0 : computeDelayMinutes(plannedInMinutes, actualInMinutes);
 
       return {
         id: `${emp.id}-${attendanceDateFilter}`,
@@ -3371,6 +3479,29 @@ useEffect(() => {
       if (normalizedFingerprint) uploadedByFingerprint.set(normalizedFingerprint, normalizedRow);
     });
 
+    // Which employees actually appear in this file, and which branches it
+    // covers. A partial export (e.g. one branch) must NOT mark everyone else
+    // "absent": we only treat a missing employee as absent when they are
+    // enrolled (have a fingerprint ID) AND belong to a branch the file covers.
+    const matchEmployeeRow = (emp) => {
+      const fp = String(emp.fingerprintId || "").replace(/^'+/, "").trim();
+      const en = String(emp.nameEn || "").trim();
+      return (
+        (en && uploadedByName.get(nameKey(en))) ||
+        (fp && uploadedByFingerprint.get(fp)) ||
+        uploadedByPhone.get(String(emp.phone || "").trim()) ||
+        uploadedByName.get(nameKey(emp.name)) ||
+        null
+      );
+    };
+    const presentLocations = new Set();
+    visibleEmployees.forEach((emp) => {
+      if (matchEmployeeRow(emp)) {
+        const loc = String(emp.location || emp.branch || "").trim();
+        if (loc) presentLocations.add(loc);
+      }
+    });
+
     return visibleEmployees.map((emp, index) => {
       const empFingerprint = String(emp.fingerprintId || "").replace(/^'+/, "").trim();
       const empNameEn = String(emp.nameEn || "").trim();
@@ -3404,6 +3535,13 @@ useEffect(() => {
           };
         }
 
+        // Only count as absence (which generates a deduction) when the
+        // employee is enrolled in the device and their branch is part of this
+        // upload. Otherwise (new hire, not enrolled, or a different branch's
+        // file) mark them "غير مشمول" — shown but never auto-deducted.
+        const empFp = String(emp.fingerprintId || "").replace(/^'+/, "").trim();
+        const empLoc = String(emp.location || emp.branch || "").trim();
+        const inScope = Boolean(empFp) && (presentLocations.size === 0 || presentLocations.has(empLoc));
         return {
           id: `uploaded-${emp.phone || index}-absent-${normalizedTargetDate}`,
           name: emp.name || "-",
@@ -3415,8 +3553,12 @@ useEffect(() => {
           actualOut: "-",
           delayMinutes: 0,
           delayLabel: language === "ar" ? "لا يوجد" : "None",
-          status: language === "ar" ? "غياب" : "Absent",
-          reason: language === "ar" ? "لا توجد بصمة لهذا اليوم" : "No attendance punch for this day",
+          status: inScope
+            ? (language === "ar" ? "غياب" : "Absent")
+            : (language === "ar" ? "غير مشمول" : "Not included"),
+          reason: inScope
+            ? (language === "ar" ? "لا توجد بصمة لهذا اليوم" : "No attendance punch for this day")
+            : (language === "ar" ? "غير مشمول في هذا الملف (غير مسجّل بالبصمة أو فرع آخر)" : "Not covered by this file"),
           date: normalizedTargetDate,
         };
       }
@@ -3427,7 +3569,7 @@ useEffect(() => {
       const actualOutValue = approvedLate?.compensateAt || actualOutBase;
       const plannedInMinutes = timeToMinutes(emp.fromHour);
       const actualInMinutes = timeToMinutes(actualInValue);
-      const delayMinutes = plannedInMinutes != null && actualInMinutes != null ? Math.max(0, actualInMinutes - plannedInMinutes) : 0;
+      const delayMinutes = computeDelayMinutes(plannedInMinutes, actualInMinutes);
       const hasActualPunch = actualInBase !== "-" || actualOutBase !== "-";
 
       let status = language === "ar" ? "حضور طبيعي" : "Regular attendance";
@@ -3482,7 +3624,10 @@ useEffect(() => {
     if (valueType === "percentage") {
       return Math.max(0, (salaryBase * configuredValue) / 100);
     }
-    return kind === "late" && configuredValue <= 0 && delayMinutes > 0 ? delayMinutes : configuredValue;
+    // No configured value = no automatic deduction. (Previously an unconfigured
+    // late deduction fell back to "delayMinutes as dinars" — an arbitrary
+    // 1 د.ل/minute rate unrelated to salary.)
+    return configuredValue;
   };
 
   const buildAttendanceDeductionRequests = (rows = [], reportDate = "") => {
@@ -3499,7 +3644,7 @@ useEffect(() => {
       if (String(row.status || "") === "غياب") {
         const amount = calculateAttendanceDeductionAmount(employee, "absence", 0);
         list.push({
-          id: Date.now() + Math.floor(Math.random() * 1000000),
+          id: uniqueId(),
           employeePhone: employee.phone,
           employeeName: employee.name,
           department: employee.department,
@@ -3526,7 +3671,7 @@ useEffect(() => {
       if (String(row.status || "") === "متأخر" && Number(row.delayMinutes || 0) > 0) {
         const amount = calculateAttendanceDeductionAmount(employee, "late", Number(row.delayMinutes || 0));
         list.push({
-          id: Date.now() + Math.floor(Math.random() * 1000000) + 1,
+          id: uniqueId(),
           employeePhone: employee.phone,
           employeeName: employee.name,
           department: employee.department,
@@ -3579,7 +3724,7 @@ useEffect(() => {
       }
 
       const reportEntry = {
-        id: Date.now(),
+        id: uniqueId(),
         createdAt: new Date().toISOString(),
         createdBy: authUser?.name || "-",
         createdByRole: authUser?.role || "-",
@@ -3605,9 +3750,21 @@ useEffect(() => {
       const attendanceGeneratedRequests = buildAttendanceDeductionRequests(adjustedRows, effectiveReportDate);
       const existingReports = readStorage(STORAGE_KEYS.attendanceReports, [], isArray);
       const nextReports = [reportEntry, ...existingReports.filter((item) => String(normalizeDateString(item.date)) !== String(reportEntry.date))].slice(0, 200);
+      // Re-uploading the same day must NOT re-create deductions HR already
+      // decided. Keep every already-decided (approved/rejected) attendance
+      // deduction for this date, and skip regenerating one for the same
+      // employee+kind+day. Only still-pending ones are replaced by fresh rows.
+      const reportDateKey = normalizeDateString(effectiveReportDate);
+      const decidedKey = (req) => `${req.employeePhone}|${req.attendancePenaltyKind}|${normalizeDateString(req.attendanceDate)}`;
+      const decidedThisDate = new Set(
+        requests
+          .filter((req) => req.deductionSource === "attendance" && normalizeDateString(req.attendanceDate) === reportDateKey && req.status !== "بانتظار الاعتماد")
+          .map(decidedKey)
+      );
+      const freshDeductions = attendanceGeneratedRequests.filter((req) => !decidedThisDate.has(decidedKey(req)));
       const nextRequests = [
-        ...attendanceGeneratedRequests,
-        ...requests.filter((req) => !(req.deductionSource === "attendance" && normalizeDateString(req.attendanceDate) === normalizeDateString(effectiveReportDate) && req.status === "بانتظار الاعتماد")),
+        ...freshDeductions,
+        ...requests.filter((req) => !(req.deductionSource === "attendance" && normalizeDateString(req.attendanceDate) === reportDateKey && req.status === "بانتظار الاعتماد")),
       ];
       if (typeof window !== "undefined") {
         window.localStorage.setItem(STORAGE_KEYS.attendanceReports, JSON.stringify(nextReports));
@@ -3690,7 +3847,7 @@ useEffect(() => {
       const phone = makePlaceholderPhone(fingerprintId);
       const displayName = name || (language === "ar" ? `موظف ${fingerprintId}` : `Employee ${fingerprintId}`);
       newEmployees.push({
-        id: Date.now() + Math.floor(Math.random() * 1000000),
+        id: uniqueId(),
         name: displayName,
         nameEn: String(name || "").trim(),
         fingerprintId: fingerprintId,
@@ -3948,7 +4105,7 @@ useEffect(() => {
 
   const pushAttendanceReportToSystem = () => {
     const reportEntry = {
-      id: Date.now(),
+      id: uniqueId(),
       createdAt: new Date().toISOString(),
       createdBy: authUser?.name || "-",
       createdByRole: authUser?.role || "-",
@@ -4068,7 +4225,7 @@ useEffect(() => {
 
     setComplaints((prev) => [
       {
-        id: Date.now(),
+        id: uniqueId(),
         senderName: authUser.name,
         senderPhone: authUser.phone,
         senderRole: authUser.role,
@@ -4109,7 +4266,7 @@ useEffect(() => {
     }
 
     const newEntry = {
-      id: Date.now(),
+      id: uniqueId(),
       senderName: authUser.name || authUser.phone || "-",
       senderPhone: authUser.phone || "-",
       rating: Number(feedbackForm.rating || 0),
@@ -4563,7 +4720,7 @@ useEffect(() => {
   };
 
   const createChatMessage = (payload) => ({
-    id: Date.now() + Math.floor(Math.random() * 1000),
+    id: uniqueId(),
     senderPhone: payload.senderPhone || authUser?.phone || "",
     type: payload.type || "text",
     text: payload.text || "",
@@ -5660,7 +5817,7 @@ useEffect(() => {
     if (requestedRole === "department_manager" && !selectedDepartment) return;
 
     const request = {
-      id: Date.now(),
+      id: uniqueId(),
       employeePhone: upgradeRequestForm.employeePhone.trim(),
       employeeName: upgradeRequestForm.employeeName.trim(),
       currentRole: currentUser?.role || "employee",
@@ -6167,7 +6324,7 @@ useEffect(() => {
 
     setPendingAccounts((prev) => [
       {
-        id: Date.now(),
+        id: uniqueId(),
         ...registerForm,
         name: normalizedName,
         phone: normalizedPhone,
@@ -6191,7 +6348,7 @@ useEffect(() => {
     if (employees.some((emp) => emp.phone === form.phone) || systemUsers.some((u) => u.phone === form.phone)) return;
 
     const employee = {
-      id: Date.now(),
+      id: uniqueId(),
       name: form.name,
       nameEn: String(form.nameEn || "").trim(),
       fingerprintId: String(form.fingerprintId || "").trim(),
@@ -6210,7 +6367,7 @@ useEffect(() => {
       leaveAccrualMode: form.leaveAccrualMode || "manual",
       leaveAccrualPeriod: form.leaveAccrualPeriod || "monthly",
       leaveAccrualAmount: Number(form.leaveAccrualAmount || 0),
-      leaveAccrualLastApplied: new Date().toISOString().slice(0, 10),
+      leaveAccrualLastApplied: localDateKey(),
       workHours: Number(form.workHours || 0),
       shift: form.shift || "morning",
       requiredHours: Number(form.requiredHours || 0),
@@ -6439,7 +6596,13 @@ useEffect(() => {
             leaveAccrualMode: editForm.leaveAccrualMode || "manual",
             leaveAccrualPeriod: editForm.leaveAccrualPeriod || "monthly",
             leaveAccrualAmount: Number(editForm.leaveAccrualAmount || 0),
-            leaveAccrualLastApplied: editForm.leaveAccrualLastApplied || emp.leaveAccrualLastApplied || new Date().toISOString().slice(0, 10),
+            // When turning auto-accrual ON (from manual/off), start counting
+            // from today — otherwise the first run would grant every period
+            // since the hire date all at once (backdated leave).
+            leaveAccrualLastApplied:
+              editForm.leaveAccrualMode === "auto" && emp.leaveAccrualMode !== "auto"
+                ? localDateKey()
+                : (editForm.leaveAccrualLastApplied || emp.leaveAccrualLastApplied || localDateKey()),
             workHours: Number(editForm.workHours || 0),
             shift: editForm.shift || "morning",
             requiredHours: Number(editForm.requiredHours || 0),
@@ -6489,6 +6652,16 @@ useEffect(() => {
     setEmployees(updatedEmployees);
     setSystemUsers(updatedUsers);
 
+    // Only write this account's credentials to the cloud when the admin actually
+    // changed the password or the phone (the login id). A name/department-only
+    // edit must NOT rewrite the password — otherwise a stale form value would
+    // revert a password the user changed on their own device.
+    const phoneChanged = String(editForm.phone || "") !== String(selectedEmployee.phone || "");
+    const passwordChanged = existingAccount
+      ? String(editForm.password || "") !== String(existingAccount.password || "")
+      : true;
+    const credentialWriters = (passwordChanged || phoneChanged) ? [selectedEmployee.phone, editForm.phone] : [];
+
     // Push to the cloud immediately so the password/account change is not
     // overwritten by the old cloud snapshot on the next sync.
     try {
@@ -6502,7 +6675,7 @@ useEffect(() => {
         chats,
         chatCalls,
         feedback: feedbackEntries,
-      }, { writeUsersFor: [selectedEmployee.phone, editForm.phone] });
+      }, { writeUsersFor: credentialWriters });
     } catch (e) {
       console.error("Save employee cloud sync failed:", e);
     }
@@ -6664,6 +6837,18 @@ useEffect(() => {
     const targetRequest = requests.find((r) => r.id === id) || null;
     if (!targetRequest || targetRequest.canDecide === false) return;
 
+    // Financial requests (advance / reward / deduction) may be decided by HR or
+    // the owner ONLY, and nobody may approve their own request. This is the
+    // action-level guard behind the UI buttons.
+    const FINANCIAL_REQUEST_TYPES = ["سلفة", "مكافأة", "خصم"];
+    if (FINANCIAL_REQUEST_TYPES.includes(targetRequest.type)) {
+      if (!canManageAll) return;
+      if (String(targetRequest.employeePhone || "") === String(authUser.phone || "")) {
+        window.alert(language === "ar" ? "لا يمكنك اعتماد طلبك المالي بنفسك." : "You cannot approve your own financial request.");
+        return;
+      }
+    }
+
     if (status === "معتمد" && targetRequest.type === "إجازة") {
       const overlap = getOverlappingLeaveRequests(
         targetRequest.employeePhone,
@@ -6742,6 +6927,8 @@ useEffect(() => {
   // Approve/reject a whole attendance-deduction group (one day) in one action.
   const decideAttendanceGroup = async (items, status) => {
     if (!authUser || !Array.isArray(items) || !items.length) return;
+    // Attendance deductions are financial → HR / owner only.
+    if (!canManageAll) return;
     const ids = new Set(items.filter((r) => r.canDecide !== false).map((r) => r.id));
     if (!ids.size) return;
     const now = new Date().toISOString();
@@ -6821,6 +7008,17 @@ useEffect(() => {
 
     if (!stage) {
       setLeaveReviewMessage(language === "ar" ? "لا يمكنك التصرف في هذا الطلب الآن." : "You can't act on this request now.");
+      return;
+    }
+    // Guard against a stale review modal: if the request advanced (another
+    // approver acted, or a background sync pulled a newer state) since this
+    // modal opened, refuse — otherwise the decision would be applied twice
+    // (e.g. the leave balance decremented twice, or a duplicate deduction).
+    const currentReq = requests.find((r) => r.id === req0.id);
+    if (!currentReq || currentReq.canDecide === false || String(currentReq.status || "") !== String(req0.status || "")) {
+      setLeaveReviewMessage(language === "ar"
+        ? "تغيّرت حالة هذا الطلب منذ فتح النافذة. أغلقها وحدّث القائمة قبل المتابعة."
+        : "This request changed since you opened it. Close and refresh before deciding.");
       return;
     }
     if (decision === "reject" && !note) {
@@ -6948,7 +7146,7 @@ useEffect(() => {
           const dedPerDay = Number(req0.hrDeductionPerDay || 0);
           const breakdown = dedDays > 0 && dedPerDay > 0 ? ` (${dedDays} × ${dedPerDay})` : "";
           extraRequests.push({
-            id: Date.now() + Math.floor(Math.random() * 100000),
+            id: uniqueId(),
             employeePhone: req0.employeePhone,
             employeeName: req0.employeeName,
             department: req0.department,
@@ -7110,7 +7308,7 @@ useEffect(() => {
     }
 
     const newRequest = {
-      id: Date.now(),
+      id: uniqueId(),
       employeePhone: employee.phone,
       employeeName: employee.name,
       department: employee.department,
@@ -7164,7 +7362,7 @@ useEffect(() => {
     }
 
     const newRequest = {
-      id: Date.now(),
+      id: uniqueId(),
       employeePhone: employee.phone,
       employeeName: employee.name,
       department: employee.department,
@@ -7199,7 +7397,7 @@ useEffect(() => {
       : rawAmount;
 
     const newRequest = {
-      id: Date.now(),
+      id: uniqueId(),
       employeePhone: employee.phone,
       employeeName: employee.name,
       department: employee.department,
@@ -8563,7 +8761,7 @@ useEffect(() => {
                       </button>
                       {isOpen && (
                         <div style={{ borderTop: "1px solid var(--border)", padding: "10px 14px 14px" }}>
-                          {requestHubHasApprovalActions && pendingCount > 0 && (
+                          {canManageAll && pendingCount > 0 && (
                             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginBottom: 10 }}>
                               <Button style={ui.smallBtn} onClick={() => decideAttendanceGroup(group.items, "معتمد")}>{language === "ar" ? "اعتماد الكل" : "Approve all"}</Button>
                               <Button variant="outline" style={ui.smallBtn} onClick={() => decideAttendanceGroup(group.items, "مرفوض")}>{language === "ar" ? "رفض الكل" : "Reject all"}</Button>
@@ -8576,7 +8774,7 @@ useEffect(() => {
                                   <div style={{ fontWeight: 700, color: "var(--text)" }}>{req.employeeName}</div>
                                   <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{currency(req.resolvedAmount || req.amount)} · {req.status}</div>
                                 </div>
-                                {requestHubHasApprovalActions && req.canDecide ? (
+                                {canManageAll && req.canDecide ? (
                                   <div style={ui.rowActions}>
                                     <Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button>
                                     <Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button>
@@ -8600,7 +8798,7 @@ useEffect(() => {
                   <MobileDataCard
                     key={req.id}
                     title={req.employeeName}
-                    action={requestHubHasApprovalActions && req.canDecide ? (
+                    action={canManageAll && req.canDecide ? (
                       <div style={ui.rowActions}>
                         {req.type === "إجازة" ? (
                           <Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{language === "ar" ? "مراجعة" : "Review"}</Button>
@@ -8636,7 +8834,7 @@ useEffect(() => {
                         <td style={ui.td}>{req.reason}</td>
                         <td style={ui.td}>{req.status}</td>
                         <td style={ui.td}>{req.decidedBy || "-"}</td>
-                        <td style={ui.td}>{requestHubHasApprovalActions && req.canDecide ? <div style={ui.rowActions}>{req.type === "إجازة" ? <Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{language === "ar" ? "مراجعة" : "Review"}</Button> : <><Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button><Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button></>}</div> : (req.awaitingEmployee && authUser?.phone === req.employeePhone ? <Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{language === "ar" ? "الرد على التعديل" : "Respond"}</Button> : <span style={{ color: "#64748b" }}>{req.status}</span>)}</td>
+                        <td style={ui.td}>{canManageAll && req.canDecide ? <div style={ui.rowActions}>{req.type === "إجازة" ? <Button onClick={() => openLeaveReview(req)} style={ui.smallBtn}>{language === "ar" ? "مراجعة" : "Review"}</Button> : <><Button onClick={() => updateRequestStatus(req.id, "معتمد")} style={ui.smallBtn}>{t.approve}</Button><Button variant="outline" onClick={() => updateRequestStatus(req.id, "مرفوض")} style={ui.smallBtn}>{t.reject}</Button></>}</div> : (req.awaitingEmployee && authUser?.phone === req.employeePhone ? <Button onClick={() => openLeaveResponse(req)} style={ui.smallBtn}>{language === "ar" ? "الرد على التعديل" : "Respond"}</Button> : <span style={{ color: "#64748b" }}>{req.status}</span>)}</td>
                       </tr>
                     ))}
                   </tbody>
