@@ -7656,6 +7656,11 @@ useEffect(() => {
                   </button>
                 </div>
               )}
+
+              <div style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)", textAlign: "center", color: "var(--text-muted, #8b93a7)" }}>
+                <div style={{ fontSize: 12 }}>{(language === "ar" ? "الإصدار " : "Version ") + __APP_VERSION__}</div>
+                <div style={{ fontSize: 10.5, marginTop: 3, opacity: 0.8, direction: "ltr" }}>{__APP_BUILD_DATE__}</div>
+              </div>
             </div>
           </aside>
         </div>
