@@ -6888,12 +6888,19 @@ useEffect(() => {
           decidedBy: authUser.name,
           updatedAt: now,
         };
-        if (changed) {
+        // If the employee already accepted EXACTLY these terms (days +
+        // deduction), don't ask them again — HR's approve now finalizes the
+        // review and the request moves on to the owner.
+        const alreadyAcceptedByEmployee =
+          req0.employeeAcceptedDays != null &&
+          Number(req0.employeeAcceptedDays) === approvedDays &&
+          Number(req0.employeeAcceptedDeduction || 0) === deductionAmount;
+        if (changed && !alreadyAcceptedByEmployee) {
           // Edited days or added a deduction -> employee must accept/reject.
           nextStatus = LEAVE_STATUS.EMPLOYEE;
           patch = { ...base, status: nextStatus, awaitingEmployee: true, canDecide: false };
         } else {
-          // No change, no deduction -> straight to the owner.
+          // No change (or terms already accepted by the employee) -> owner.
           nextStatus = LEAVE_STATUS.OWNER;
           patch = { ...base, status: nextStatus, awaitingEmployee: false, canDecide: true };
         }
@@ -7006,7 +7013,8 @@ useEffect(() => {
   };
 
   // Employee responds after HR edited days or added a deduction.
-  // accept -> goes to the owner (final stage). reject -> request cancelled.
+  // accept -> returns to HR to confirm, then HR sends it to the owner.
+  // reject -> request cancelled.
   const submitLeaveResponse = async (action) => {
     if (!authUser || !leaveResponseRequest) return;
     const req0 = leaveResponseRequest;
@@ -7016,10 +7024,14 @@ useEffect(() => {
     let patch;
     if (action === "accept") {
       patch = {
-        status: LEAVE_STATUS.OWNER,
+        status: LEAVE_STATUS.HR,
         awaitingEmployee: false,
         canDecide: true,
         employeeRespondedAt: now,
+        // Remember exactly what was accepted so HR's confirmation doesn't
+        // bounce the request back to the employee for the same terms.
+        employeeAcceptedDays: Number(req0.leaveDaysApproved ?? req0.leaveDaysRequested ?? 0),
+        employeeAcceptedDeduction: Number(req0.hrDeductionAmount || 0),
         updatedAt: now,
         employeeNote: note || req0.employeeNote || "",
       };
@@ -10441,7 +10453,7 @@ useEffect(() => {
                 }
                 submitLeaveResponse("reject");
               }} style={{ color: "#b91c1c", borderColor: "#fecaca" }}>{language === "ar" ? "رفض" : "Reject"}</Button>
-              <Button onClick={() => submitLeaveResponse("accept")}>{language === "ar" ? "قبول وإرسال للمالك" : "Accept → Owner"}</Button>
+              <Button onClick={() => submitLeaveResponse("accept")}>{language === "ar" ? "قبول وإرجاع لـ HR" : "Accept → HR"}</Button>
             </div>
           </div>
         )}
