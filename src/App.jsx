@@ -4318,6 +4318,20 @@ useEffect(() => {
     REJECTED: "مرفوض",
   };
 
+  // Does this employee's department actually have a manager? Uses the same
+  // matching rule as inManagedDepartment / the send-push edge function.
+  const departmentHasManager = (managerDept, dept) => {
+    const a = String(managerDept || "").trim();
+    const b = String(dept || "").trim();
+    return systemUsers.some((u) => {
+      if (u?.role !== "department_manager") return false;
+      const md = String(u.managedDepartment || "").trim();
+      if (!md) return false;
+      if (md === "all") return true;
+      return (a !== "" && md === a) || (b !== "" && md === b);
+    });
+  };
+
   // Returns which action the current user may take on a leave/late request:
   // "dept" | "hr" | "owner" | "employee" | "hrResend" | "late" | null
   const getLeaveActionForUser = (req) => {
@@ -7307,6 +7321,11 @@ useEffect(() => {
       }
     }
 
+    // A leave request normally starts at the department manager. If that
+    // department has no manager, start at HR instead of parking the request in
+    // a stage nobody owns (HR would otherwise have to approve it twice).
+    const hasDeptManager = departmentHasManager(employee.managerDepartment, employee.department);
+
     const newRequest = {
       id: uniqueId(),
       employeePhone: employee.phone,
@@ -7320,9 +7339,11 @@ useEffect(() => {
       lateTo: leaveRequestForm.type === "تأخير" ? leaveRequestForm.lateTo : "",
       compensateAt: leaveRequestForm.type === "تأخير" ? leaveRequestForm.compensateAt : "",
       reason: leaveRequestForm.reason,
-      status: leaveRequestForm.type === "إجازة" ? "بانتظار مدير الإدارة" : "بانتظار الاعتماد",
+      status: leaveRequestForm.type === "إجازة"
+        ? (hasDeptManager ? LEAVE_STATUS.DEPT : LEAVE_STATUS.HR)
+        : "بانتظار الاعتماد",
       approver: leaveRequestForm.type === "إجازة"
-        ? "مدير الإدارة ← HR ← المالك"
+        ? (hasDeptManager ? "مدير الإدارة ← HR ← المالك" : "HR ← المالك")
         : (canManageAll ? "HR / المالك" : canManageDepartment ? "مدير الإدارة" : "مدير الفرع"),
       decidedBy: "",
       canDecide: true,
