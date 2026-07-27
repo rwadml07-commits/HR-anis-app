@@ -2652,12 +2652,12 @@ export default function HRManagementApp() {
           "--shadow-lg": "0 24px 60px rgba(0, 0, 0, 0.55)",
         }
       : {
-          "--bg": "#f2ede4",
+          "--bg": "#e8e0d1",
           "--surface": "#ffffff",
-          "--surface-soft": "#faf7f1",
-          "--surface-muted": "#f1ece2",
+          "--surface-soft": "#f9f5ee",
+          "--surface-muted": "#f0eade",
           "--surface-raised": "#ffffff",
-          "--border": "#e4ddd0",
+          "--border": "#dbd1bf",
           "--border-strong": "#cbc0ad",
           "--text": "#241d19",
           "--text-soft": "#584d43",
@@ -2698,7 +2698,7 @@ export default function HRManagementApp() {
       "--control-h": "42px",
       "--header-h": "64px",
       "--sidebar-w": "268px",
-      "--rail-w": "68px",
+      "--rail-w": "54px",
       "--rail-w-open": "290px",
       "--bottomnav-h": "62px",
     };
@@ -12165,7 +12165,8 @@ const ui = {
   },
   sidebarItemCollapsed: {
     justifyContent: "center",
-    padding: 8,
+    minHeight: 40,
+    padding: 4,
     position: "relative",
   },
   sidebarItemDot: {
@@ -12204,7 +12205,7 @@ const ui = {
   },
   navRailTop: {
     minHeight: "var(--header-h)",
-    padding: "12px 10px",
+    padding: "12px 7px",
     borderBottom: "1px solid var(--border)",
     display: "flex",
     alignItems: "center",
@@ -12212,8 +12213,8 @@ const ui = {
     flexShrink: 0,
   },
   navRailToggle: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     flexShrink: 0,
     borderRadius: "var(--r-md)",
     borderWidth: 1,
@@ -12232,7 +12233,7 @@ const ui = {
     margin: "4px 8px 6px",
   },
   sidebarBodyCollapsed: {
-    padding: 10,
+    padding: "10px 7px",
     gap: 6,
     overflowX: "hidden",
   },
