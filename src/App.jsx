@@ -1894,6 +1894,9 @@ export default function HRManagementApp() {
   const [attendanceHistoryEmployee, setAttendanceHistoryEmployee] = useState(null);
   const [attendanceHistoryDateFilter, setAttendanceHistoryDateFilter] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Desktop rail: always visible as icons, expands on hover or stays open when pinned by a click.
+  const [navPinned, setNavPinned] = useState(false);
+  const [navHovered, setNavHovered] = useState(false);
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [branchFilter, setBranchFilter] = useState("all");
@@ -2695,6 +2698,8 @@ export default function HRManagementApp() {
       "--control-h": "42px",
       "--header-h": "64px",
       "--sidebar-w": "268px",
+      "--rail-w": "68px",
+      "--rail-w-open": "290px",
       "--bottomnav-h": "62px",
     };
 
@@ -7820,22 +7825,87 @@ useEffect(() => {
     );
   }
 
+  const canApproveAccounts = canManageAll || canManageBranch || canManageDepartment;
+  const navSections = [
+    {
+      key: "main",
+      label: language === "ar" ? "الأقسام الرئيسية" : "Main Sections",
+      items: [
+        { tab: "employees", icon: Users, label: t.employeesTab, short: language === "ar" ? "الموظفين" : "Employees" },
+        { tab: "salary", icon: Briefcase, label: t.salaryTab, short: language === "ar" ? "الرواتب" : "Salary" },
+        { tab: "leave", icon: CalendarDays, label: t.leaveTab, short: language === "ar" ? "الإجازات" : "Leave" },
+      ],
+    },
+    ...(canAccessRequestsHub
+      ? [{
+        key: "requests",
+        label: t.requestsHub,
+        items: [
+          ...(canApproveAccounts
+            ? [{ tab: "accountApprovals", icon: UserCheck, label: language === "ar" ? "اعتماد إنشاء الحسابات" : "Account Creation Approvals", badge: pendingAccountCount }]
+            : []),
+          {
+            tab: "requestApprovals",
+            icon: ShieldCheck,
+            label: requestHubHasApprovalActions
+              ? (language === "ar" ? "اعتماد الغياب والتأخير والسلف والمكافأة والخصم" : "Request Approvals")
+              : (language === "ar" ? "طلبات الإجازة والتأخير والسلف" : "Leave, Late & Advance Requests"),
+            badge: pendingRequestsCount,
+          },
+          {
+            tab: "accountUpgrade",
+            icon: ShieldCheck,
+            label: canManageAll
+              ? (language === "ar" ? "اعتماد ترقية الحسابات" : "Account Upgrade Approvals")
+              : (language === "ar" ? "ترقية الحساب" : "Upgrade Account"),
+            badge: pendingUpgradeCount,
+          },
+          { tab: "complaints", icon: BadgeInfo, label: t.complaintsTab, badge: pendingComplaintsCount },
+          ...(isProgrammerUser
+            ? [{ tab: "programmerFeedback", icon: Star, label: language === "ar" ? "تقييمات المستخدمين" : "User Feedback", badge: visibleFeedbackEntries.length }]
+            : []),
+          ...(canApproveAccounts
+            ? [{ tab: "attendanceReport", icon: Fingerprint, label: language === "ar" ? "تقرير البصمة" : "Attendance Report" }]
+            : []),
+          { tab: "chat", icon: MessageCircle, label: t.chatTab },
+        ],
+      }]
+      : []),
+  ];
+  const navExpanded = !isMobileView && (navPinned || navHovered);
+  const renderNavButton = (item, { collapsed }) => {
+    const ItemIcon = item.icon;
+    const isActive = activeTab === item.tab;
+    return (
+      <button
+        key={item.tab}
+        type="button"
+        title={collapsed ? (item.short || item.label) : undefined}
+        aria-current={isActive ? "page" : undefined}
+        onClick={() => openSidebarTab(item.tab)}
+        style={{
+          ...ui.sidebarItem,
+          ...(collapsed ? ui.sidebarItemCollapsed : {}),
+          ...(isActive ? ui.sidebarItemActive : {}),
+        }}
+      >
+        <span style={{ ...ui.sidebarItemIcon, ...(isActive ? ui.sidebarItemIconActive : {}) }}>
+          <ItemIcon size={18} />
+        </span>
+        {!collapsed && <span style={ui.sidebarItemText}>{item.label}</span>}
+        {item.badge > 0 && (
+          collapsed
+            ? <span style={ui.sidebarItemDot} />
+            : <span style={ui.sidebarNotifBadge}>{item.badge > 99 ? "99+" : item.badge}</span>
+        )}
+      </button>
+    );
+  };
+
   return (
-    <div style={{ ...ui.appShell, ...(isMobileView ? ui.appShellMobile : {}) }}>
+    <div style={{ ...ui.appShell, ...(isMobileView ? ui.appShellMobile : ui.appShellWithRail) }}>
       <header style={{ ...ui.topBar, ...(isMobileView ? ui.topBarMobile : {}) }}>
         <div style={ui.topBarIdentity}>
-          {!isMobileView && (
-            <div style={ui.menuButtonWrap}>
-              <Button variant="outline" onClick={() => setSidebarOpen(true)} style={ui.topBarIconBtn} title={language === "ar" ? "القائمة" : "Menu"}>
-                <Menu size={18} />
-              </Button>
-              {topMenuNotificationsCount > 0 && (
-                <span style={ui.menuNotifBadge}>
-                  {topMenuNotificationsCount > 99 ? "99+" : topMenuNotificationsCount}
-                </span>
-              )}
-            </div>
-          )}
           <img src={BRAND_ASSETS.logo} alt="" aria-hidden="true" style={ui.topBarLogo} />
           <div style={{ minWidth: 0 }}>
             <div style={ui.topBarName}>{authUser?.name || t.appTitle}</div>
@@ -7913,7 +7983,52 @@ useEffect(() => {
         <Star size={18} />
       </button>
 
-      {sidebarOpen && (
+      {!isMobileView && (
+        <aside
+          style={{ ...ui.navRail, ...(navExpanded ? ui.navRailExpanded : {}) }}
+          onMouseEnter={() => setNavHovered(true)}
+          onMouseLeave={() => setNavHovered(false)}
+          aria-label={language === "ar" ? "التنقل الرئيسي" : "Main navigation"}
+        >
+          <div style={ui.navRailTop}>
+            <button
+              type="button"
+              onClick={() => setNavPinned((p) => !p)}
+              style={ui.navRailToggle}
+              title={language === "ar" ? (navPinned ? "تصغير القائمة" : "تثبيت القائمة") : (navPinned ? "Collapse menu" : "Pin menu")}
+              aria-pressed={navPinned}
+            >
+              {navPinned ? <X size={18} /> : <Menu size={18} />}
+            </button>
+            {navExpanded && (
+              <div style={{ minWidth: 0 }}>
+                <div style={ui.sidebarBrand}>{language === "ar" ? BRAND_ASSETS.sidebarLabelAr : BRAND_ASSETS.sidebarLabelEn}</div>
+                <div style={ui.sidebarSubbrand}>{authUser?.name || t.appTitle}</div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ ...ui.sidebarBody, ...(navExpanded ? {} : ui.sidebarBodyCollapsed) }}>
+            {navSections.map((section) => (
+              <div key={section.key} style={ui.sidebarGroup}>
+                {navExpanded
+                  ? <div style={ui.sidebarSectionLabel}>{section.label}</div>
+                  : <div style={ui.navRailDivider} />}
+                {section.items.map((item) => renderNavButton(item, { collapsed: !navExpanded }))}
+              </div>
+            ))}
+
+            {navExpanded && (
+              <div style={ui.sidebarVersionBox}>
+                <div style={{ fontSize: 12 }}>{(language === "ar" ? "الإصدار " : "Version ") + __APP_VERSION__}</div>
+                <div style={{ fontSize: 10.5, marginTop: 3, opacity: 0.8, direction: "ltr" }}>{__APP_BUILD_DATE__}</div>
+              </div>
+            )}
+          </div>
+        </aside>
+      )}
+
+      {sidebarOpen && isMobileView && (
         <div style={ui.sidebarOverlay} onClick={() => setSidebarOpen(false)}>
           <aside style={ui.sidebarPanel} onClick={(e) => e.stopPropagation()}>
             <div style={ui.sidebarTop}>
@@ -7925,86 +8040,12 @@ useEffect(() => {
             </div>
 
             <div style={ui.sidebarBody}>
-              <div style={ui.sidebarGroup}>
-                <div style={ui.sidebarSectionLabel}>{language === "ar" ? "الأقسام الرئيسية" : "Main Sections"}</div>
-
-                <button style={{ ...ui.sidebarItem, ...(activeTab === "employees" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("employees")}>
-                  <span style={{ ...ui.sidebarItemIcon, ...(activeTab === "employees" ? ui.sidebarItemIconActive : {}) }}><Users size={18} /></span>
-                  <span style={ui.sidebarItemText}>{t.employeesTab}</span>
-                </button>
-
-                <button style={{ ...ui.sidebarItem, ...(activeTab === "salary" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("salary")}>
-                  <span style={{ ...ui.sidebarItemIcon, ...(activeTab === "salary" ? ui.sidebarItemIconActive : {}) }}><Briefcase size={18} /></span>
-                  <span style={ui.sidebarItemText}>{t.salaryTab}</span>
-                </button>
-
-                <button style={{ ...ui.sidebarItem, ...(activeTab === "leave" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("leave")}>
-                  <span style={{ ...ui.sidebarItemIcon, ...(activeTab === "leave" ? ui.sidebarItemIconActive : {}) }}><CalendarDays size={18} /></span>
-                  <span style={ui.sidebarItemText}>{t.leaveTab}</span>
-                </button>
-              </div>
-
-              {canAccessRequestsHub && (
-                <div style={ui.sidebarGroup}>
-                  <div style={ui.sidebarSectionLabel}>{t.requestsHub}</div>
-
-                  {(canManageAll || canManageBranch || canManageDepartment) && (
-                    <button style={{ ...ui.sidebarItem, ...(activeTab === "accountApprovals" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("accountApprovals")}>
-                      <span style={ui.sidebarItemIcon}><UserCheck size={18} /></span>
-                      <span style={ui.sidebarItemText}>{language === "ar" ? "اعتماد إنشاء الحسابات" : "Account Creation Approvals"}</span>
-                      {pendingAccountCount > 0 && (
-                        <span style={ui.sidebarNotifBadge}>{pendingAccountCount > 99 ? "99+" : pendingAccountCount}</span>
-                      )}
-                    </button>
-                  )}
-
-                  <button style={{ ...ui.sidebarItem, ...(activeTab === "requestApprovals" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("requestApprovals")}>
-                    <span style={ui.sidebarItemIcon}><ShieldCheck size={18} /></span>
-                    <span style={ui.sidebarItemText}>{requestHubHasApprovalActions ? (language === "ar" ? "اعتماد الغياب والتأخير والسلف والمكافأة والخصم" : "Request Approvals") : (language === "ar" ? "طلبات الإجازة والتأخير والسلف" : "Leave, Late & Advance Requests")}</span>
-                    {pendingRequestsCount > 0 && (
-                      <span style={ui.sidebarNotifBadge}>{pendingRequestsCount > 99 ? "99+" : pendingRequestsCount}</span>
-                    )}
-                  </button>
-
-                  <button style={{ ...ui.sidebarItem, ...(activeTab === "accountUpgrade" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("accountUpgrade")}>
-                    <span style={ui.sidebarItemIcon}><ShieldCheck size={18} /></span>
-                    <span style={ui.sidebarItemText}>{canManageAll ? (language === "ar" ? "اعتماد ترقية الحسابات" : "Account Upgrade Approvals") : (language === "ar" ? "ترقية الحساب" : "Upgrade Account")}</span>
-                    {pendingUpgradeCount > 0 && (
-                      <span style={ui.sidebarNotifBadge}>{pendingUpgradeCount > 99 ? "99+" : pendingUpgradeCount}</span>
-                    )}
-                  </button>
-
-                  <button style={{ ...ui.sidebarItem, ...(activeTab === "complaints" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("complaints")}>
-                    <span style={ui.sidebarItemIcon}><BadgeInfo size={18} /></span>
-                    <span style={ui.sidebarItemText}>{t.complaintsTab}</span>
-                    {pendingComplaintsCount > 0 && (
-                      <span style={ui.sidebarNotifBadge}>{pendingComplaintsCount > 99 ? "99+" : pendingComplaintsCount}</span>
-                    )}
-                  </button>
-
-                  {isProgrammerUser && (
-                    <button style={{ ...ui.sidebarItem, ...(activeTab === "programmerFeedback" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("programmerFeedback")}>
-                      <span style={ui.sidebarItemIcon}><Star size={18} /></span>
-                      <span style={ui.sidebarItemText}>{language === "ar" ? "تقييمات المستخدمين" : "User Feedback"}</span>
-                      {visibleFeedbackEntries.length > 0 && (
-                        <span style={ui.sidebarNotifBadge}>{visibleFeedbackEntries.length > 99 ? "99+" : visibleFeedbackEntries.length}</span>
-                      )}
-                    </button>
-                  )}
-
-                  {(canManageAll || canManageBranch || canManageDepartment) && (
-                    <button style={{ ...ui.sidebarItem, ...(activeTab === "attendanceReport" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("attendanceReport")}>
-                      <span style={ui.sidebarItemIcon}><Fingerprint size={18} /></span>
-                      <span style={ui.sidebarItemText}>{language === "ar" ? "تقرير البصمة" : "Attendance Report"}</span>
-                    </button>
-                  )}
-
-                  <button style={{ ...ui.sidebarItem, ...(activeTab === "chat" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("chat")}>
-                    <span style={ui.sidebarItemIcon}><MessageCircle size={18} /></span>
-                    <span style={ui.sidebarItemText}>{t.chatTab}</span>
-                  </button>
+              {navSections.map((section) => (
+                <div key={section.key} style={ui.sidebarGroup}>
+                  <div style={ui.sidebarSectionLabel}>{section.label}</div>
+                  {section.items.map((item) => renderNavButton(item, { collapsed: false }))}
                 </div>
-              )}
+              ))}
 
               {isMobileView && (
                 <div style={ui.sidebarGroup}>
@@ -8035,7 +8076,7 @@ useEffect(() => {
                 </div>
               )}
 
-              <div style={{ marginTop: 8, paddingTop: 14, borderTop: "1px solid var(--border)", textAlign: "center", color: "var(--text-muted)" }}>
+              <div style={ui.sidebarVersionBox}>
                 <div style={{ fontSize: 12 }}>{(language === "ar" ? "الإصدار " : "Version ") + __APP_VERSION__}</div>
                 <div style={{ fontSize: 10.5, marginTop: 3, opacity: 0.8, direction: "ltr" }}>{__APP_BUILD_DATE__}</div>
               </div>
@@ -11167,6 +11208,9 @@ const ui = {
     gap: 12,
     maxWidth: "100%",
   },
+  appShellWithRail: {
+    paddingInlineStart: "calc(20px + var(--rail-w))",
+  },
   topBar: {
     position: "sticky",
     top: 0,
@@ -12118,6 +12162,79 @@ const ui = {
     borderColor: "var(--accent-border)",
     color: "var(--accent)",
     fontWeight: 700,
+  },
+  sidebarItemCollapsed: {
+    justifyContent: "center",
+    padding: 8,
+    position: "relative",
+  },
+  sidebarItemDot: {
+    position: "absolute",
+    top: 7,
+    insetInlineEnd: 7,
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: "var(--danger)",
+  },
+  sidebarVersionBox: {
+    marginTop: 8,
+    paddingTop: 14,
+    borderTop: "1px solid var(--border)",
+    textAlign: "center",
+    color: "var(--text-muted)",
+  },
+  navRail: {
+    position: "fixed",
+    top: 0,
+    bottom: 0,
+    insetInlineStart: 0,
+    zIndex: 1100,
+    width: "var(--rail-w)",
+    background: "var(--surface)",
+    borderInlineEnd: "1px solid var(--border)",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    transition: "width 0.18s ease, box-shadow 0.18s ease",
+  },
+  navRailExpanded: {
+    width: "var(--rail-w-open)",
+    boxShadow: "var(--shadow-lg)",
+  },
+  navRailTop: {
+    minHeight: "var(--header-h)",
+    padding: "12px 10px",
+    borderBottom: "1px solid var(--border)",
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexShrink: 0,
+  },
+  navRailToggle: {
+    width: 40,
+    height: 40,
+    flexShrink: 0,
+    borderRadius: "var(--r-md)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+    background: "var(--surface-soft)",
+    color: "var(--text)",
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  navRailDivider: {
+    height: 1,
+    background: "var(--border)",
+    margin: "4px 8px 6px",
+  },
+  sidebarBodyCollapsed: {
+    padding: 10,
+    gap: 6,
+    overflowX: "hidden",
   },
 
   chatLayoutMobile: {
