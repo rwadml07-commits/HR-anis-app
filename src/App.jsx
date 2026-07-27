@@ -1920,8 +1920,6 @@ export default function HRManagementApp() {
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordingPaused, setRecordingPaused] = useState(false);
   const [isMobileView, setIsMobileView] = useState(() => (typeof window !== "undefined" ? window.innerWidth <= 768 : false));
-  // At >=1100px the navigation drawer is docked permanently instead of overlaying.
-  const [isDockedNav, setIsDockedNav] = useState(() => (typeof window !== "undefined" ? window.innerWidth >= 1100 : false));
   const [mobileChatView, setMobileChatView] = useState("list");
   const [contactListMenuChatId, setContactListMenuChatId] = useState("");
 
@@ -2724,7 +2722,6 @@ export default function HRManagementApp() {
     if (typeof window === "undefined") return undefined;
     const onResize = () => {
       setIsMobileView(window.innerWidth <= 768);
-      setIsDockedNav(window.innerWidth >= 1100);
     };
     onResize();
     window.addEventListener("resize", onResize);
@@ -7824,10 +7821,10 @@ useEffect(() => {
   }
 
   return (
-    <div style={{ ...ui.appShell, ...(isMobileView ? ui.appShellMobile : {}), ...(isDockedNav ? ui.appShellDocked : {}) }}>
+    <div style={{ ...ui.appShell, ...(isMobileView ? ui.appShellMobile : {}) }}>
       <header style={{ ...ui.topBar, ...(isMobileView ? ui.topBarMobile : {}) }}>
         <div style={ui.topBarIdentity}>
-          {!isDockedNav && !isMobileView && (
+          {!isMobileView && (
             <div style={ui.menuButtonWrap}>
               <Button variant="outline" onClick={() => setSidebarOpen(true)} style={ui.topBarIconBtn} title={language === "ar" ? "القائمة" : "Menu"}>
                 <Menu size={18} />
@@ -7916,17 +7913,15 @@ useEffect(() => {
         <Star size={18} />
       </button>
 
-      {(sidebarOpen || isDockedNav) && (
-        <div style={isDockedNav ? ui.sidebarDockLayer : ui.sidebarOverlay} onClick={isDockedNav ? undefined : () => setSidebarOpen(false)}>
-          <aside style={{ ...ui.sidebarPanel, ...(isDockedNav ? ui.sidebarPanelDocked : {}) }} onClick={(e) => e.stopPropagation()}>
+      {sidebarOpen && (
+        <div style={ui.sidebarOverlay} onClick={() => setSidebarOpen(false)}>
+          <aside style={ui.sidebarPanel} onClick={(e) => e.stopPropagation()}>
             <div style={ui.sidebarTop}>
               <div style={{ minWidth: 0 }}>
                 <div style={ui.sidebarBrand}>{language === "ar" ? BRAND_ASSETS.sidebarLabelAr : BRAND_ASSETS.sidebarLabelEn}</div>
                 <div style={ui.sidebarSubbrand}>{authUser?.name || t.appTitle}</div>
               </div>
-              {!isDockedNav && (
-                <button onClick={() => setSidebarOpen(false)} style={ui.sidebarCloseButton} aria-label={language === "ar" ? "إغلاق القائمة" : "Close menu"}><X size={18} /></button>
-              )}
+              <button onClick={() => setSidebarOpen(false)} style={ui.sidebarCloseButton} aria-label={language === "ar" ? "إغلاق القائمة" : "Close menu"}><X size={18} /></button>
             </div>
 
             <div style={ui.sidebarBody}>
@@ -11172,10 +11167,6 @@ const ui = {
     gap: 12,
     maxWidth: "100%",
   },
-  appShellDocked: {
-    paddingInlineStart: "calc(var(--sidebar-w) + 24px)",
-    maxWidth: "none",
-  },
   topBar: {
     position: "sticky",
     top: 0,
@@ -12028,14 +12019,6 @@ const ui = {
     background: "var(--overlay)",
     zIndex: 1200,
   },
-  sidebarDockLayer: {
-    position: "fixed",
-    insetInlineStart: 0,
-    top: 0,
-    bottom: 0,
-    width: "var(--sidebar-w)",
-    zIndex: 800,
-  },
   sidebarPanel: {
     position: "absolute",
     top: 0,
@@ -12049,14 +12032,6 @@ const ui = {
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
-  },
-  sidebarPanelDocked: {
-    position: "relative",
-    right: "auto",
-    width: "100%",
-    height: "100%",
-    boxShadow: "none",
-    background: "var(--surface-soft)",
   },
   sidebarTop: {
     padding: "16px",
