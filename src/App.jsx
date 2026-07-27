@@ -2519,6 +2519,7 @@ export default function HRManagementApp() {
       body {
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
+        background: var(--bg);
       }
 
       /* Keyboard users always get a visible focus ring; mouse users don't. */
@@ -11193,7 +11194,8 @@ const ui = {
   appShell: {
     minHeight: "100vh",
     padding: "0 20px 32px",
-    background: "var(--bg)",
+    position: "relative",
+    zIndex: 1,
     display: "grid",
     gap: "var(--sp-4)",
     alignContent: "start",
@@ -11395,7 +11397,8 @@ const ui = {
   },
   centerPage: {
     minHeight: "100vh",
-    background: "var(--bg)",
+    position: "relative",
+    zIndex: 1,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
