@@ -55,6 +55,7 @@ import {
   EyeOff,
   Upload,
   Building2,
+  Award,
 } from "lucide-react";
 
 // === Artifact-preview compatibility shim ===
@@ -309,7 +310,15 @@ const initialChats = [
 
 const initialChatCalls = [];
 const initialFeedbackEntries = [];
+// Tiling grayscale noise used to give the page background a subtle paper grain
+// instead of a flat colour. Kept as a data URI so there is no extra request.
+const PAPER_GRAIN_SVG = "url(data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%27120%27%20height=%27120%27%3E%3Cfilter%20id=%27g%27%3E%3CfeTurbulence%20type=%27fractalNoise%27%20baseFrequency=%270.8%27%20numOctaves=%274%27%20stitchTiles=%27stitch%27/%3E%3CfeColorMatrix%20type=%27saturate%27%20values=%270%27/%3E%3C/filter%3E%3Crect%20width=%27120%27%20height=%27120%27%20filter=%27url%28%23g%29%27%20opacity=%27OPACITY%27/%3E%3C/svg%3E)";
+
 const PROGRAMMER_ACCOUNT_PHONE = "مبرمجR1";
+// Notes written in the (still locked) evaluation section are delivered to this
+// account only. It matches the default owner phone below.
+const EVALUATION_NOTE_TARGET_PHONE = "0950000000";
+const EVALUATION_NOTE_KIND = "evaluationNote";
 
 const initialSystemUsers = [
   { phone: "0950000000", password: "12345678", role: "owner", name: "المالك", managedDepartment: "all", managedBranch: "all", mustChangePassword: false, passwordChangedOnce: true },
@@ -979,9 +988,9 @@ const translations = {
     submitComplaint: "إرسال",
     incomingComplaints: "الرسائل الواردة",
     myComplaints: "رسائلي",
-    employeesTab: "القسم الأول: بيانات الموظفين",
-    salaryTab: "القسم الثاني: الراتب والسلف",
-    leaveTab: "القسم الثالث: الإجازات",
+    employeesTab: "بيانات الموظفين",
+    salaryTab: "الراتب والسلف",
+    leaveTab: "الإجازات",
     employeeData: "بيانات الموظفين",
     employeeDataDesc: "اسم الموظف، الإدارة، المنطقة، الهاتف، البريد، المرتب الأساسي، والوصف الوظيفي.",
     salaryData: "الراتب والسلف والصافي",
@@ -1165,9 +1174,9 @@ const translations = {
     approvalsDesc: "Accounts remain inactive until approval and data completion.",
     requestsHub: "Requests & Approvals",
     requestsHubDesc: "Track leave, late, advance, reward, and deduction requests based on permissions.",
-    employeesTab: "Section 1: Employees",
-    salaryTab: "Section 2: Salary & Advances",
-    leaveTab: "Section 3: Leave",
+    employeesTab: "Employees",
+    salaryTab: "Salary & Advances",
+    leaveTab: "Leave",
     employeeData: "Employees Data",
     employeeDataDesc: "Name, department, location, phone, email, basic salary and job description.",
     salaryData: "Salary, Advances & Net",
@@ -1576,14 +1585,26 @@ function getBranchBadgeStyle(branch) {
 }
 
 function Button({ children, style, variant = "primary", onClick, type = "button", disabled, width, title }) {
+  const [hovered, setHovered] = React.useState(false);
   const styles = variant === "primary" ? ui.buttonPrimary : variant === "danger" ? ui.buttonDanger : ui.buttonOutline;
+  const hoverStyles = variant === "outline" ? ui.buttonOutlineHover : ui.buttonSolidHover;
   return (
     <button
       type={type}
       title={title}
+      aria-label={title}
       onClick={onClick}
       disabled={disabled}
-      style={{ ...ui.buttonBase, ...styles, ...(width ? { width } : {}), ...style, ...(disabled ? { opacity: 0.6, cursor: "not-allowed" } : {}) }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        ...ui.buttonBase,
+        ...styles,
+        ...(hovered && !disabled ? hoverStyles : {}),
+        ...(width ? { width } : {}),
+        ...style,
+        ...(disabled ? { opacity: 0.5, cursor: "not-allowed" } : {}),
+      }}
     >
       {children}
     </button>
@@ -1725,14 +1746,57 @@ function Badge({ children }) {
   return <span style={ui.badge}>{children}</span>;
 }
 
+// Four warm glows drifting behind the whole app. Sizes, positions and cycle
+// lengths are deliberately mismatched so the motion never looks repetitive.
+const AMBIENT_GLOWS = [
+  { size: 460, top: "6%", start: "4%", animation: "hr-glow-a 42s ease-in-out infinite" },
+  { size: 360, top: "48%", start: "64%", animation: "hr-glow-b 57s ease-in-out infinite" },
+  { size: 540, top: "66%", start: "14%", animation: "hr-glow-c 71s ease-in-out infinite" },
+  { size: 300, top: "18%", start: "72%", animation: "hr-glow-d 49s ease-in-out infinite" },
+];
+
+function AmbientGlow() {
+  return (
+    <div aria-hidden="true" data-ambient-glow="true" style={ui.glowLayer}>
+      {AMBIENT_GLOWS.map((glow) => (
+        <span
+          key={glow.animation}
+          style={{
+            ...ui.glowOrb,
+            width: glow.size,
+            height: glow.size,
+            top: glow.top,
+            insetInlineStart: glow.start,
+            animation: glow.animation,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function Modal({ open, title, children, onClose, maxWidth = 760 }) {
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose?.();
+    };
+    document.addEventListener("keydown", onKey);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open, onClose]);
+
   if (!open) return null;
   return (
     <div style={ui.modalOverlay} onClick={onClose}>
-      <div style={{ ...ui.modalBox, maxWidth }} onClick={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label={typeof title === "string" ? title : undefined} style={{ ...ui.modalBox, maxWidth }} onClick={(e) => e.stopPropagation()}>
         <div style={ui.modalHeader}>
-          <h3 style={{ margin: 0, fontSize: 21 }}>{title}</h3>
-          <button onClick={onClose} style={ui.iconButton}><X size={18} /></button>
+          <h3 style={{ margin: 0, fontSize: 18, fontWeight: 700, minWidth: 0 }}>{title}</h3>
+          <button onClick={onClose} style={ui.iconButton} aria-label="إغلاق"><X size={18} /></button>
         </div>
         <div style={ui.modalBody}>{children}</div>
       </div>
@@ -1746,8 +1810,8 @@ function SectionHeader({ icon: Icon, title, description, isMobile = false }) {
     <div style={{ ...ui.sectionHeader, ...(compact ? ui.sectionHeaderMobile : {}) }}>
       <div style={{ ...ui.sectionIcon, ...(compact ? ui.sectionIconMobile : {}) }}><Icon size={compact ? 18 : 20} /></div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <h2 style={{ margin: "0 0 6px", fontSize: compact ? 20 : 28, lineHeight: 1.25, wordBreak: "break-word" }}>{title}</h2>
-        {description ? <p style={{ margin: 0, color: "var(--text-soft)", lineHeight: compact ? 1.7 : 1.8, fontSize: compact ? 13 : 16 }}>{description}</p> : null}
+        <h2 style={{ margin: 0, fontSize: compact ? 17 : 20, fontWeight: 700, lineHeight: 1.3, wordBreak: "break-word" }}>{title}</h2>
+        {description ? <p style={{ margin: "4px 0 0", color: "var(--text-soft)", lineHeight: 1.6, fontSize: compact ? 12.5 : 13.5 }}>{description}</p> : null}
       </div>
     </div>
   );
@@ -1756,19 +1820,19 @@ function SectionHeader({ icon: Icon, title, description, isMobile = false }) {
 function SummaryCard({ title, value, icon: Icon, subtitle, isMobile = false }) {
   return (
     <Card style={{ ...ui.summaryCard, ...(isMobile ? ui.summaryCardMobile : {}) }}>
-      <div>
+      <div style={{ minWidth: 0 }}>
         <div style={ui.summaryTitle}>{title}</div>
         <div style={{ ...ui.summaryValue, ...(isMobile ? ui.summaryValueMobile : {}) }}>{value}</div>
         {subtitle ? <div style={ui.summarySubtitle}>{subtitle}</div> : null}
       </div>
-      <div style={ui.summaryIcon}><Icon size={18} /></div>
+      <div style={{ ...ui.summaryIcon, ...(isMobile ? ui.summaryIconMobile : {}) }}><Icon size={isMobile ? 18 : 20} /></div>
     </Card>
   );
 }
 
 function Field({ label, children, full = false }) {
   return (
-    <div style={{ ...(full ? { gridColumn: "1 / -1" } : {}), marginBottom: 18 }}>
+    <div style={{ ...(full ? { gridColumn: "1 / -1" } : {}), marginBottom: 16 }}>
       <label style={ui.label}>{label}</label>
       {children}
     </div>
@@ -1868,6 +1932,9 @@ export default function HRManagementApp() {
   const [attendanceHistoryEmployee, setAttendanceHistoryEmployee] = useState(null);
   const [attendanceHistoryDateFilter, setAttendanceHistoryDateFilter] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Desktop rail: always visible as icons, expands on hover or stays open when pinned by a click.
+  const [navPinned, setNavPinned] = useState(false);
+  const [navHovered, setNavHovered] = useState(false);
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [branchFilter, setBranchFilter] = useState("all");
@@ -1931,6 +1998,8 @@ export default function HRManagementApp() {
   const [feedbackWidgetOpen, setFeedbackWidgetOpen] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState({ rating: 0, message: "" });
   const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [evaluationNoteText, setEvaluationNoteText] = useState("");
+  const [evaluationNoteMessage, setEvaluationNoteMessage] = useState("");
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -2485,6 +2554,52 @@ export default function HRManagementApp() {
       document.head.appendChild(themeStyleTag);
     }
     themeStyleTag.innerHTML = `
+      *, *::before, *::after { box-sizing: border-box; }
+
+      body {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      /* Keyboard users always get a visible focus ring; mouse users don't. */
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+        border-radius: var(--r-sm);
+      }
+      button:focus:not(:focus-visible) { outline: none; }
+
+      button {
+        transition: background-color .16s ease, border-color .16s ease, color .16s ease, box-shadow .16s ease, transform .12s ease;
+      }
+      button:not(:disabled):active { transform: scale(0.975); }
+      button:disabled { opacity: .5; cursor: not-allowed; }
+
+      /* Scrollbars tuned to the active theme instead of the OS default. */
+      html { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+      ::-webkit-scrollbar { width: 10px; height: 10px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border-strong);
+        border-radius: var(--r-pill);
+        border: 3px solid transparent;
+        background-clip: content-box;
+      }
+      ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); background-clip: content-box; }
+
+      @media (max-width: 768px) {
+        [data-stats-grid] > *:last-child:nth-child(odd) { grid-column: 1 / -1; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: .01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: .01ms !important;
+          scroll-behavior: auto !important;
+        }
+      }
+
       input::placeholder,
       textarea::placeholder {
         color: var(--input-placeholder);
@@ -2498,6 +2613,13 @@ export default function HRManagementApp() {
         background: var(--input-bg) !important;
         color: var(--input-text) !important;
         box-sizing: border-box;
+        transition: border-color .16s ease, box-shadow .16s ease;
+      }
+
+      input:hover:not(:focus),
+      textarea:hover:not(:focus),
+      select:hover:not(:focus) {
+        border-color: var(--border-strong) !important;
       }
 
       input:focus,
@@ -2515,8 +2637,8 @@ export default function HRManagementApp() {
       }
 
       select option {
-        background: ${themeMode === "dark" ? "#282b2e" : "#ffffff"} !important;
-        color: ${themeMode === "dark" ? "#eceef0" : "#0f172a"} !important;
+        background: ${themeMode === "dark" ? "#212427" : "#ffffff"} !important;
+        color: ${themeMode === "dark" ? "#f1f3f5" : "#241d19"} !important;
       }
 
       /* Hide the up/down spinner arrows on number inputs */
@@ -2540,43 +2662,96 @@ export default function HRManagementApp() {
     const root = document.documentElement;
     const vars = themeMode === "dark"
       ? {
-          "--bg": "#1f2123",
-          "--surface": "#282b2e",
-          "--surface-soft": "#303437",
-          "--surface-muted": "#3a3e42",
-          "--border": "#454a4f",
-          "--text": "#eceef0",
-          "--text-soft": "#bcc1c6",
-          "--text-muted": "#8b9196",
-          "--primary": "#d98a3d",
-          "--primary-contrast": "#1b1713",
-          "--accent": "#d98a3d",
-          "--accent-soft": "rgba(217, 138, 61, 0.16)",
-          "--accent-border": "rgba(217, 138, 61, 0.42)",
-          "--ring": "rgba(217, 138, 61, 0.30)",
-          "--shadow": "0 18px 44px rgba(0, 0, 0, 0.40)",
+          "--bg": "#17191b",
+          "--surface": "#212427",
+          "--surface-soft": "#292d31",
+          "--surface-muted": "#32363b",
+          "--surface-raised": "#2f3338",
+          "--border": "#3a3f45",
+          "--border-strong": "#4d535a",
+          "--text": "#f1f3f5",
+          "--text-soft": "#c3c9cf",
+          "--text-muted": "#8f979e",
+          "--primary": "#e08c42",
+          "--primary-contrast": "#1a1206",
+          "--accent": "#e08c42",
+          "--accent-soft": "rgba(224, 140, 66, 0.14)",
+          "--accent-border": "rgba(224, 140, 66, 0.38)",
+          "--ring": "rgba(224, 140, 66, 0.32)",
+          "--success": "#4ade80",
+          "--success-soft": "rgba(74, 222, 128, 0.14)",
+          "--warning": "#fbbf24",
+          "--warning-soft": "rgba(251, 191, 36, 0.14)",
+          "--danger": "#f87171",
+          "--danger-soft": "rgba(248, 113, 113, 0.14)",
+          "--info": "#60a5fa",
+          "--info-soft": "rgba(96, 165, 250, 0.14)",
+          "--overlay": "rgba(8, 9, 10, 0.68)",
+          "--shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.5)",
+          "--shadow": "0 1px 3px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.36)",
+          "--shadow-lg": "0 24px 60px rgba(0, 0, 0, 0.55)",
+          "--page-bg": `${PAPER_GRAIN_SVG.replace("OPACITY", "0.07")}, #17191b`,
+          "--glow": "rgba(224, 140, 66, 0.26)",
         }
       : {
-          "--bg": "#f4efe5",
-          "--surface": "#fbf8f2",
-          "--surface-soft": "#f6f1e7",
-          "--surface-muted": "#efe7d7",
-          "--border": "#e1d7c5",
-          "--text": "#2b2420",
-          "--text-soft": "#5d5247",
+          "--bg": "#e8e0d1",
+          "--surface": "#ffffff",
+          "--surface-soft": "#f9f5ee",
+          "--surface-muted": "#f0eade",
+          "--surface-raised": "#ffffff",
+          "--border": "#dbd1bf",
+          "--border-strong": "#cbc0ad",
+          "--text": "#241d19",
+          "--text-soft": "#584d43",
           "--text-muted": "#8a7d6d",
           "--primary": "#b5471f",
-          "--primary-contrast": "#fbf8f2",
+          "--primary-contrast": "#ffffff",
           "--accent": "#b5471f",
-          "--accent-soft": "rgba(181, 71, 31, 0.10)",
-          "--accent-border": "rgba(181, 71, 31, 0.30)",
-          "--ring": "rgba(181, 71, 31, 0.20)",
-          "--shadow": "0 1px 2px rgba(60, 40, 20, 0.05), 0 8px 22px rgba(60, 40, 20, 0.08)",
+          "--accent-soft": "rgba(181, 71, 31, 0.08)",
+          "--accent-border": "rgba(181, 71, 31, 0.28)",
+          "--ring": "rgba(181, 71, 31, 0.22)",
+          "--success": "#15803d",
+          "--success-soft": "rgba(21, 128, 61, 0.10)",
+          "--warning": "#b45309",
+          "--warning-soft": "rgba(180, 83, 9, 0.10)",
+          "--danger": "#c02626",
+          "--danger-soft": "rgba(192, 38, 38, 0.09)",
+          "--info": "#1d4ed8",
+          "--info-soft": "rgba(29, 78, 216, 0.09)",
+          "--overlay": "rgba(36, 29, 25, 0.42)",
+          "--shadow-sm": "0 1px 2px rgba(60, 40, 20, 0.06)",
+          "--shadow": "0 1px 2px rgba(60, 40, 20, 0.05), 0 6px 18px rgba(60, 40, 20, 0.07)",
+          "--shadow-lg": "0 24px 56px rgba(60, 40, 20, 0.16)",
+          "--page-bg": `${PAPER_GRAIN_SVG.replace("OPACITY", "0.13")}, #e8e0d1`,
+          "--glow": "rgba(214, 108, 45, 0.46)",
         };
 
-    Object.entries(vars).forEach(([key, value]) => root.style.setProperty(key, value));
-    document.body.style.background = "var(--bg)";
+    const scale = {
+      "--r-sm": "8px",
+      "--r-md": "12px",
+      "--r-lg": "16px",
+      "--r-xl": "20px",
+      "--r-pill": "999px",
+      "--sp-1": "4px",
+      "--sp-2": "8px",
+      "--sp-3": "12px",
+      "--sp-4": "16px",
+      "--sp-5": "20px",
+      "--sp-6": "24px",
+      "--sp-8": "32px",
+      "--control-h": "42px",
+      "--header-h": "64px",
+      "--sidebar-w": "268px",
+      "--rail-w": "54px",
+      "--rail-w-open": "290px",
+      "--bottomnav-h": "62px",
+    };
+
+    Object.entries({ ...vars, ...scale }).forEach(([key, value]) => root.style.setProperty(key, value));
+    document.body.style.background = "var(--page-bg)";
+    document.body.style.backgroundAttachment = "fixed";
     document.body.style.color = "var(--text)";
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", vars["--bg"]);
   }, [language, themeMode]);
 
 
@@ -2591,12 +2766,13 @@ export default function HRManagementApp() {
     }
     favicon.setAttribute("href", BRAND_ASSETS.logo);
     favicon.setAttribute("type", "image/svg+xml");
-    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", "#0b1220");
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
-    const onResize = () => setIsMobileView(window.innerWidth <= 768);
+    const onResize = () => {
+      setIsMobileView(window.innerWidth <= 768);
+    };
     onResize();
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -2622,6 +2798,24 @@ export default function HRManagementApp() {
       * { box-sizing: border-box; }
       html, body, #root { max-width: 100%; overflow-x: hidden; }
       img, video, canvas, audio { max-width: 100%; }
+
+      /* Four warm orange glows drifting slowly behind the whole app. */
+      @keyframes hr-glow-a { 0% { transform: translate3d(0, 0, 0); } 33% { transform: translate3d(22vw, 26vh, 0); } 66% { transform: translate3d(-14vw, 48vh, 0); } 100% { transform: translate3d(0, 0, 0); } }
+      @keyframes hr-glow-b { 0% { transform: translate3d(0, 0, 0); } 30% { transform: translate3d(-26vw, 34vh, 0); } 70% { transform: translate3d(-8vw, -22vh, 0); } 100% { transform: translate3d(0, 0, 0); } }
+      @keyframes hr-glow-c { 0% { transform: translate3d(0, 0, 0); } 40% { transform: translate3d(18vw, -30vh, 0); } 75% { transform: translate3d(34vw, 18vh, 0); } 100% { transform: translate3d(0, 0, 0); } }
+      @keyframes hr-glow-d { 0% { transform: translate3d(0, 0, 0); } 25% { transform: translate3d(-30vw, -16vh, 0); } 60% { transform: translate3d(12vw, -40vh, 0); } 100% { transform: translate3d(0, 0, 0); } }
+
+      /* The global reduced-motion reset would freeze the glows. They are a
+         decorative background the user explicitly asked for, they never move
+         content, and they are slow enough not to be distracting, so keep them
+         running. Selector specificity beats the reset's universal selector. */
+      @media (prefers-reduced-motion: reduce) {
+        [data-ambient-glow] > span { animation-iteration-count: infinite !important; }
+        [data-ambient-glow] > span:nth-child(1) { animation-duration: 42s !important; }
+        [data-ambient-glow] > span:nth-child(2) { animation-duration: 57s !important; }
+        [data-ambient-glow] > span:nth-child(3) { animation-duration: 71s !important; }
+        [data-ambient-glow] > span:nth-child(4) { animation-duration: 49s !important; }
+      }
       @media (max-width: 768px) {
         html, body { overflow-x: hidden !important; }
         body { -webkit-text-size-adjust: 100%; }
@@ -4248,11 +4442,59 @@ useEffect(() => {
 
   const visibleFeedbackEntries = useMemo(() => {
     if (!authUser) return [];
+    // Evaluation notes are addressed to the owner account only, so they never
+    // show up in the programmer feedback inbox.
+    const ratings = feedbackEntries.filter((item) => item.kind !== EVALUATION_NOTE_KIND);
     if (isProgrammerUser) {
-      return [...feedbackEntries].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      return [...ratings].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     }
-    return feedbackEntries.filter((item) => item.senderPhone === authUser.phone).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    return ratings.filter((item) => item.senderPhone === authUser.phone).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
   }, [feedbackEntries, authUser, isProgrammerUser]);
+
+  const canReadEvaluationNotes = String(authUser?.phone || "").trim() === EVALUATION_NOTE_TARGET_PHONE;
+
+  const evaluationNotes = useMemo(() => {
+    if (!canReadEvaluationNotes) return [];
+    return feedbackEntries
+      .filter((item) => item.kind === EVALUATION_NOTE_KIND)
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }, [feedbackEntries, canReadEvaluationNotes]);
+
+  const submitEvaluationNote = async () => {
+    if (!authUser) return;
+    const text = String(evaluationNoteText || "").trim();
+    if (!text) {
+      setEvaluationNoteMessage(language === "ar" ? "اكتب الملاحظة قبل الإرسال" : "Write your note before sending.");
+      return;
+    }
+
+    const newEntry = {
+      id: uniqueId(),
+      kind: EVALUATION_NOTE_KIND,
+      senderName: authUser.name || authUser.phone || "-",
+      senderPhone: authUser.phone || "-",
+      rating: 0,
+      message: text,
+      targetPhone: EVALUATION_NOTE_TARGET_PHONE,
+      createdAt: new Date().toISOString(),
+      status: "sent",
+    };
+    const nextFeedback = [newEntry, ...feedbackEntries];
+    setFeedbackEntries(nextFeedback);
+    setEvaluationNoteText("");
+    setEvaluationNoteMessage(language === "ar" ? "تم إرسال الملاحظة بنجاح" : "Your note was sent.");
+    await forceRemoteSaveSnapshot({
+      employees,
+      requests,
+      users: systemUsers,
+      pending: pendingAccounts,
+      upgrades: upgradeRequests,
+      complaints,
+      chats,
+      chatCalls,
+      feedback: nextFeedback,
+    });
+  };
 
   const submitFeedback = async () => {
     if (!authUser) return;
@@ -5918,6 +6160,8 @@ useEffect(() => {
     setPasswordDialogOpen(false);
     setSidebarOpen(false);
     setViewMode("upgraded");
+    setEvaluationNoteText("");
+    setEvaluationNoteMessage("");
   };
 
   const openResetSystemDialog = () => {
@@ -7620,6 +7864,7 @@ useEffect(() => {
     if (showRegister) {
       return (
         <div style={ui.centerPage}>
+          <AmbientGlow />
           <Card style={ui.authCard}>
             <div style={ui.authHead}>
               <h1 style={ui.bigTitle}>{t.registerTitle}</h1>
@@ -7672,6 +7917,7 @@ useEffect(() => {
 
     return (
       <div style={ui.centerPage}>
+        <AmbientGlow />
         <Card style={{ ...ui.authCard, maxWidth: 420, padding: "48px 28px" }}>
           <div style={{ ...ui.phoneWrap, marginBottom: 24 }}><img src={BRAND_ASSETS.logo} alt={BRAND_ASSETS.name} style={ui.brandLogoAuth} /></div>
 
@@ -7694,79 +7940,158 @@ useEffect(() => {
     );
   }
 
-  return (
-    <div style={{ ...ui.appShell, ...(isMobileView ? ui.appShellMobile : {}) }}>
-      <Card style={{ ...ui.heroCard, ...(isMobileView ? ui.heroCardMobile : {}) }}>
-        <div style={{ ...ui.heroRow, ...(isMobileView ? ui.heroRowMobile : {}) }}>
-          <div style={{ display: "flex", gap: 16, alignItems: "flex-start", flex: 1, minWidth: isMobileView ? 0 : 300 }}>
-            <div style={ui.menuButtonWrap}>
-              <Button variant="outline" onClick={() => setSidebarOpen(true)} style={{ width: 44, padding: 0 }} title={language === "ar" ? "القائمة" : "Menu"}>
-                <Menu size={18} />
-              </Button>
-              {topMenuNotificationsCount > 0 && (
-                <span style={ui.menuNotifBadge}>
-                  {topMenuNotificationsCount > 99 ? "99+" : topMenuNotificationsCount}
-                </span>
-              )}
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={ui.heroBadge}><img src={BRAND_ASSETS.logo} alt={BRAND_ASSETS.name} style={ui.brandLogoBadge} /> {t.heroBadge}</div>
-              <h1 style={{ ...ui.heroTitle, ...(isMobileView ? ui.heroTitleMobile : {}) }}>{t.appTitle}</h1>
-              <p style={{ ...ui.heroDesc, ...(isMobileView ? ui.heroDescMobile : {}) }}>
-                {authUser?.name || "-"} — {getRoleLabel(authUser?.role, language)}
-              </p>
-            </div>
-          </div>
+  const canApproveAccounts = canManageAll || canManageBranch || canManageDepartment;
+  const navSections = [
+    {
+      key: "main",
+      label: language === "ar" ? "الأقسام الرئيسية" : "Main Sections",
+      items: [
+        { tab: "employees", icon: Users, label: t.employeesTab, short: language === "ar" ? "الموظفين" : "Employees" },
+        { tab: "salary", icon: Briefcase, label: t.salaryTab, short: language === "ar" ? "الرواتب" : "Salary" },
+        { tab: "leave", icon: CalendarDays, label: t.leaveTab, short: language === "ar" ? "الإجازات" : "Leave" },
+        {
+          tab: "evaluation",
+          icon: Award,
+          label: language === "ar" ? "لوحة تقييم الموظفين" : "Employee Scorecard",
+          short: language === "ar" ? "التقييم" : "Scorecard",
+          soon: true,
+        },
+      ],
+    },
+    ...(canAccessRequestsHub
+      ? [{
+        key: "requests",
+        label: t.requestsHub,
+        items: [
+          ...(canApproveAccounts
+            ? [{ tab: "accountApprovals", icon: UserCheck, label: language === "ar" ? "اعتماد إنشاء الحسابات" : "Account Creation Approvals", badge: pendingAccountCount }]
+            : []),
+          {
+            tab: "requestApprovals",
+            icon: ShieldCheck,
+            label: requestHubHasApprovalActions
+              ? (language === "ar" ? "اعتماد الغياب والتأخير والسلف والمكافأة والخصم" : "Request Approvals")
+              : (language === "ar" ? "طلبات الإجازة والتأخير والسلف" : "Leave, Late & Advance Requests"),
+            badge: pendingRequestsCount,
+          },
+          {
+            tab: "accountUpgrade",
+            icon: ShieldCheck,
+            label: canManageAll
+              ? (language === "ar" ? "اعتماد ترقية الحسابات" : "Account Upgrade Approvals")
+              : (language === "ar" ? "ترقية الحساب" : "Upgrade Account"),
+            badge: pendingUpgradeCount,
+          },
+          { tab: "complaints", icon: BadgeInfo, label: t.complaintsTab, badge: pendingComplaintsCount },
+          ...(isProgrammerUser
+            ? [{ tab: "programmerFeedback", icon: Star, label: language === "ar" ? "تقييمات المستخدمين" : "User Feedback", badge: visibleFeedbackEntries.length }]
+            : []),
+          ...(canApproveAccounts
+            ? [{ tab: "attendanceReport", icon: Fingerprint, label: language === "ar" ? "تقرير البصمة" : "Attendance Report" }]
+            : []),
+          { tab: "chat", icon: MessageCircle, label: t.chatTab },
+        ],
+      }]
+      : []),
+  ];
+  const navExpanded = !isMobileView && (navPinned || navHovered);
+  const renderNavButton = (item, { collapsed }) => {
+    const ItemIcon = item.icon;
+    const isActive = activeTab === item.tab;
+    return (
+      <button
+        key={item.tab}
+        type="button"
+        title={collapsed ? (item.short || item.label) : undefined}
+        aria-current={isActive ? "page" : undefined}
+        onClick={() => openSidebarTab(item.tab)}
+        style={{
+          ...ui.sidebarItem,
+          ...(collapsed ? ui.sidebarItemCollapsed : {}),
+          ...(isActive ? ui.sidebarItemActive : {}),
+        }}
+      >
+        <span style={{ ...ui.sidebarItemIcon, ...(isActive ? ui.sidebarItemIconActive : {}) }}>
+          <ItemIcon size={18} />
+        </span>
+        {!collapsed && <span style={ui.sidebarItemText}>{item.label}</span>}
+        {item.soon && !collapsed && (
+          <span style={ui.sidebarSoonChip}>{language === "ar" ? "قريباً" : "Soon"}</span>
+        )}
+        {item.badge > 0 && (
+          collapsed
+            ? <span style={ui.sidebarItemDot} />
+            : <span style={ui.sidebarNotifBadge}>{item.badge > 99 ? "99+" : item.badge}</span>
+        )}
+      </button>
+    );
+  };
 
-          <div style={{ ...ui.heroActions, ...(isMobileView ? ui.heroActionsMobile : {}) }}>
-            {isAuthenticated && canAddEmployees && (
-              <Button onClick={() => setAddDialogOpen(true)}><Plus size={16} /> {t.addEmployee}</Button>
-            )}
-            {isAuthenticated && canSearch && (
-              <div style={{ position: "relative" }}>
-                <Button variant="outline" onClick={() => setSearchOpen((o) => !o)} style={{ width: 44, padding: 0 }} title={t.search}>
-                  <Search size={16} />
-                </Button>
-                {searchOpen && (
-                  <div style={{ ...ui.searchBox, position: "absolute", top: 52, left: 0, width: 300, maxWidth: "78vw", zIndex: 60, boxShadow: "var(--shadow)" }}>
-                    <Search size={16} />
-                    <input
-                      style={ui.searchInput}
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder={t.search}
-                      disabled={!canSearch}
-                      autoFocus
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-            {isUpgradedUser && (
-              <Button
-                variant={viewMode === "employee" ? "primary" : "outline"}
-                onClick={() => setViewMode((m) => (m === "employee" ? "upgraded" : "employee"))}
-                title={language === "ar" ? "تبديل بين حسابك الشخصي وصلاحية الترقية" : "Switch between personal and upgraded view"}
-                style={isMobileView ? undefined : { padding: "0 12px", whiteSpace: "nowrap" }}
-              >
-                <ArrowLeftRight size={16} />
-                {language === "ar"
-                  ? (viewMode === "employee" ? " وضع الموظف" : " وضع الترقية")
-                  : (viewMode === "employee" ? " Employee" : " Manager")}
-              </Button>
-            )}
-            <Button variant="outline" onClick={() => setSettingsOpen(true)} style={{ width: 44, padding: 0 }}>
-              <Settings size={16} />
-            </Button>
-            <Button variant="outline" onClick={handleLogout} title={t.logout} style={isMobileView ? ui.mobileLogoutButton : { width: 44, padding: 0 }}><LogOut size={16} />{isMobileView ? (language === "ar" ? " خروج" : " Logout") : null}</Button>
+  return (
+    <div style={{ ...ui.appShell, ...(isMobileView ? ui.appShellMobile : ui.appShellWithRail) }}>
+      <AmbientGlow />
+      <header style={{ ...ui.topBar, ...(isMobileView ? ui.topBarMobile : {}) }}>
+        <div style={ui.topBarIdentity}>
+          <img src={BRAND_ASSETS.logo} alt="" aria-hidden="true" style={ui.topBarLogo} />
+          <div style={{ minWidth: 0 }}>
+            <div style={ui.topBarName}>{authUser?.name || t.appTitle}</div>
+            <div style={ui.topBarRole}>{getRoleLabel(authUser?.role, language)}</div>
           </div>
         </div>
-      </Card>
+
+        <div style={ui.topBarActions}>
+          {isAuthenticated && canSearch && (
+            <div style={{ position: "relative" }}>
+              <Button variant="outline" onClick={() => setSearchOpen((o) => !o)} style={ui.topBarIconBtn} title={t.search}>
+                <Search size={16} />
+              </Button>
+              {searchOpen && (
+                <div style={{ ...ui.searchBox, position: "absolute", top: 50, insetInlineEnd: 0, width: 300, maxWidth: "78vw", zIndex: 60, boxShadow: "var(--shadow-lg)" }}>
+                  <Search size={16} />
+                  <input
+                    style={ui.searchInput}
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder={t.search}
+                    disabled={!canSearch}
+                    autoFocus
+                  />
+                </div>
+              )}
+            </div>
+          )}
+          {isUpgradedUser && !isMobileView && (
+            <Button
+              variant={viewMode === "employee" ? "primary" : "outline"}
+              onClick={() => setViewMode((m) => (m === "employee" ? "upgraded" : "employee"))}
+              title={language === "ar" ? "تبديل بين حسابك الشخصي وصلاحية الترقية" : "Switch between personal and upgraded view"}
+              style={{ padding: "0 12px" }}
+            >
+              <ArrowLeftRight size={16} />
+              {language === "ar"
+                ? (viewMode === "employee" ? " وضع الموظف" : " وضع الترقية")
+                : (viewMode === "employee" ? " Employee" : " Manager")}
+            </Button>
+          )}
+          <Button variant="outline" onClick={() => setSettingsOpen(true)} style={ui.topBarIconBtn} title={language === "ar" ? "الإعدادات" : "Settings"}>
+            <Settings size={16} />
+          </Button>
+          {!isMobileView && (
+            <Button variant="outline" onClick={handleLogout} title={t.logout} style={ui.topBarIconBtn}><LogOut size={16} /></Button>
+          )}
+          {isAuthenticated && canAddEmployees && !isMobileView && (
+            <Button onClick={() => setAddDialogOpen(true)} title={t.addEmployee}>
+              <Plus size={16} />{` ${t.addEmployee}`}
+            </Button>
+          )}
+        </div>
+      </header>
 
       <div
         title={getCloudStatusIndicatorTitle()}
         style={{
           ...ui.syncStatusDot,
+          ...(isMobileView ? ui.syncStatusDotMobile : {}),
           background: getCloudStatusIndicatorColor(),
         }}
       />
@@ -7774,109 +8099,110 @@ useEffect(() => {
       <button
         type="button"
         title={language === "ar" ? "تقييم التطبيق" : "Rate the app"}
+        aria-label={language === "ar" ? "تقييم التطبيق" : "Rate the app"}
         onClick={() => {
           setFeedbackMessage("");
           setFeedbackWidgetOpen(true);
         }}
-        style={ui.feedbackFloatingButton}
+        style={{ ...ui.feedbackFloatingButton, ...(isMobileView ? ui.feedbackFloatingButtonMobile : {}) }}
       >
         <Star size={18} />
       </button>
 
-      {sidebarOpen && (
-        <div style={ui.sidebarOverlay} onClick={() => setSidebarOpen(false)}>
-          <aside style={ui.sidebarPanel} onClick={(e) => e.stopPropagation()}><div style={ui.sidebarGlowTop} /><div style={ui.sidebarGlowBottom} />
-            <div style={ui.sidebarTop}>
-              <div>
+      {!isMobileView && (
+        <aside
+          style={{ ...ui.navRail, ...(navExpanded ? ui.navRailExpanded : {}) }}
+          onMouseEnter={() => setNavHovered(true)}
+          onMouseLeave={() => setNavHovered(false)}
+          aria-label={language === "ar" ? "التنقل الرئيسي" : "Main navigation"}
+        >
+          <div style={ui.navRailTop}>
+            <button
+              type="button"
+              onClick={() => setNavPinned((p) => !p)}
+              style={ui.navRailToggle}
+              title={language === "ar" ? (navPinned ? "تصغير القائمة" : "تثبيت القائمة") : (navPinned ? "Collapse menu" : "Pin menu")}
+              aria-pressed={navPinned}
+            >
+              {navPinned ? <X size={18} /> : <Menu size={18} />}
+            </button>
+            {navExpanded && (
+              <div style={{ minWidth: 0 }}>
                 <div style={ui.sidebarBrand}>{language === "ar" ? BRAND_ASSETS.sidebarLabelAr : BRAND_ASSETS.sidebarLabelEn}</div>
                 <div style={ui.sidebarSubbrand}>{authUser?.name || t.appTitle}</div>
               </div>
-              <button onClick={() => setSidebarOpen(false)} style={ui.sidebarCloseButton}><X size={18} /></button>
+            )}
+          </div>
+
+          <div style={{ ...ui.sidebarBody, ...(navExpanded ? {} : ui.sidebarBodyCollapsed) }}>
+            {navSections.map((section) => (
+              <div key={section.key} style={ui.sidebarGroup}>
+                {navExpanded
+                  ? <div style={ui.sidebarSectionLabel}>{section.label}</div>
+                  : <div style={ui.navRailDivider} />}
+                {section.items.map((item) => renderNavButton(item, { collapsed: !navExpanded }))}
+              </div>
+            ))}
+
+            {navExpanded && (
+              <div style={ui.sidebarVersionBox}>
+                <div style={{ fontSize: 12 }}>{(language === "ar" ? "الإصدار " : "Version ") + __APP_VERSION__}</div>
+                <div style={{ fontSize: 10.5, marginTop: 3, opacity: 0.8, direction: "ltr" }}>{__APP_BUILD_DATE__}</div>
+              </div>
+            )}
+          </div>
+        </aside>
+      )}
+
+      {sidebarOpen && isMobileView && (
+        <div style={ui.sidebarOverlay} onClick={() => setSidebarOpen(false)}>
+          <aside style={ui.sidebarPanel} onClick={(e) => e.stopPropagation()}>
+            <div style={ui.sidebarTop}>
+              <div style={{ minWidth: 0 }}>
+                <div style={ui.sidebarBrand}>{language === "ar" ? BRAND_ASSETS.sidebarLabelAr : BRAND_ASSETS.sidebarLabelEn}</div>
+                <div style={ui.sidebarSubbrand}>{authUser?.name || t.appTitle}</div>
+              </div>
+              <button onClick={() => setSidebarOpen(false)} style={ui.sidebarCloseButton} aria-label={language === "ar" ? "إغلاق القائمة" : "Close menu"}><X size={18} /></button>
             </div>
 
             <div style={ui.sidebarBody}>
-              <div style={ui.sidebarGroup}>
-                <div style={ui.sidebarSectionLabel}>{language === "ar" ? "الأقسام الرئيسية" : "Main Sections"}</div>
+              {navSections.map((section) => (
+                <div key={section.key} style={ui.sidebarGroup}>
+                  <div style={ui.sidebarSectionLabel}>{section.label}</div>
+                  {section.items.map((item) => renderNavButton(item, { collapsed: false }))}
+                </div>
+              ))}
 
-                <button style={{ ...ui.sidebarItem, ...(activeTab === "employees" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("employees")}>
-                  <span style={ui.sidebarItemIcon}><Users size={18} /></span>
-                  <span>{t.employeesTab}</span>
-                </button>
-
-                <button style={{ ...ui.sidebarItem, ...(activeTab === "salary" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("salary")}>
-                  <span style={ui.sidebarItemIcon}><Briefcase size={18} /></span>
-                  <span>{t.salaryTab}</span>
-                </button>
-
-                <button style={{ ...ui.sidebarItem, ...(activeTab === "leave" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("leave")}>
-                  <span style={ui.sidebarItemIcon}><CalendarDays size={18} /></span>
-                  <span>{t.leaveTab}</span>
-                </button>
-              </div>
-
-              {canAccessRequestsHub && (
+              {isMobileView && (
                 <div style={ui.sidebarGroup}>
-                  <div style={ui.sidebarSectionLabel}>{t.requestsHub}</div>
-
-                  {(canManageAll || canManageBranch || canManageDepartment) && (
-                    <button style={{ ...ui.sidebarItem, ...(activeTab === "accountApprovals" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("accountApprovals")}>
-                      <span style={ui.sidebarItemIcon}><UserCheck size={18} /></span>
-                      <span style={ui.sidebarItemText}>{language === "ar" ? "اعتماد إنشاء الحسابات" : "Account Creation Approvals"}</span>
-                      {pendingAccountCount > 0 && (
-                        <span style={ui.sidebarNotifBadge}>{pendingAccountCount > 99 ? "99+" : pendingAccountCount}</span>
-                      )}
+                  <div style={ui.sidebarSectionLabel}>{language === "ar" ? "الحساب" : "Account"}</div>
+                  {isAuthenticated && canAddEmployees && (
+                    <button style={ui.sidebarItem} onClick={() => { setSidebarOpen(false); setAddDialogOpen(true); }}>
+                      <span style={ui.sidebarItemIcon}><Plus size={18} /></span>
+                      <span style={ui.sidebarItemText}>{t.addEmployee}</span>
                     </button>
                   )}
-
-                  <button style={{ ...ui.sidebarItem, ...(activeTab === "requestApprovals" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("requestApprovals")}>
-                    <span style={ui.sidebarItemIcon}><ShieldCheck size={18} /></span>
-                    <span style={ui.sidebarItemText}>{requestHubHasApprovalActions ? (language === "ar" ? "اعتماد الغياب والتأخير والسلف والمكافأة والخصم" : "Request Approvals") : (language === "ar" ? "طلبات الإجازة والتأخير والسلف" : "Leave, Late & Advance Requests")}</span>
-                    {pendingRequestsCount > 0 && (
-                      <span style={ui.sidebarNotifBadge}>{pendingRequestsCount > 99 ? "99+" : pendingRequestsCount}</span>
-                    )}
-                  </button>
-
-                  <button style={{ ...ui.sidebarItem, ...(activeTab === "accountUpgrade" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("accountUpgrade")}>
-                    <span style={ui.sidebarItemIcon}><ShieldCheck size={18} /></span>
-                    <span style={ui.sidebarItemText}>{canManageAll ? (language === "ar" ? "اعتماد ترقية الحسابات" : "Account Upgrade Approvals") : (language === "ar" ? "ترقية الحساب" : "Upgrade Account")}</span>
-                    {pendingUpgradeCount > 0 && (
-                      <span style={ui.sidebarNotifBadge}>{pendingUpgradeCount > 99 ? "99+" : pendingUpgradeCount}</span>
-                    )}
-                  </button>
-
-                  <button style={{ ...ui.sidebarItem, ...(activeTab === "complaints" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("complaints")}>
-                    <span style={ui.sidebarItemIcon}><BadgeInfo size={18} /></span>
-                    <span style={ui.sidebarItemText}>{t.complaintsTab}</span>
-                    {pendingComplaintsCount > 0 && (
-                      <span style={ui.sidebarNotifBadge}>{pendingComplaintsCount > 99 ? "99+" : pendingComplaintsCount}</span>
-                    )}
-                  </button>
-
-                  {isProgrammerUser && (
-                    <button style={{ ...ui.sidebarItem, ...(activeTab === "programmerFeedback" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("programmerFeedback")}>
-                      <span style={ui.sidebarItemIcon}><Star size={18} /></span>
-                      <span style={ui.sidebarItemText}>{language === "ar" ? "تقييمات المستخدمين" : "User Feedback"}</span>
-                      {visibleFeedbackEntries.length > 0 && (
-                        <span style={ui.sidebarNotifBadge}>{visibleFeedbackEntries.length > 99 ? "99+" : visibleFeedbackEntries.length}</span>
-                      )}
+                  {isUpgradedUser && (
+                    <button
+                      style={ui.sidebarItem}
+                      onClick={() => { setSidebarOpen(false); setViewMode((m) => (m === "employee" ? "upgraded" : "employee")); }}
+                    >
+                      <span style={ui.sidebarItemIcon}><ArrowLeftRight size={18} /></span>
+                      <span style={ui.sidebarItemText}>
+                        {language === "ar"
+                          ? (viewMode === "employee" ? "وضع الموظف" : "وضع الترقية")
+                          : (viewMode === "employee" ? "Employee view" : "Manager view")}
+                      </span>
                     </button>
                   )}
-
-                  {(canManageAll || canManageBranch || canManageDepartment) && (
-                    <button style={{ ...ui.sidebarItem, ...(activeTab === "attendanceReport" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("attendanceReport")}>
-                      <span style={ui.sidebarItemIcon}><Fingerprint size={18} /></span>
-                      <span style={ui.sidebarItemText}>{language === "ar" ? "تقرير البصمة" : "Attendance Report"}</span>
-                    </button>
-                  )}
-
-                  <button style={{ ...ui.sidebarItem, ...(activeTab === "chat" ? ui.sidebarItemActive : {}) }} onClick={() => openSidebarTab("chat")}>
-                    <span style={ui.sidebarItemIcon}><MessageCircle size={18} /></span>
-                    <span style={ui.sidebarItemText}>{t.chatTab}</span>
+                  <button style={ui.sidebarItem} onClick={handleLogout}>
+                    <span style={ui.sidebarItemIcon}><LogOut size={18} /></span>
+                    <span style={ui.sidebarItemText}>{t.logout}</span>
                   </button>
                 </div>
               )}
 
-              <div style={{ marginTop: 22, paddingTop: 14, borderTop: "1px solid rgba(255,255,255,0.08)", textAlign: "center", color: "var(--text-muted, #8b93a7)" }}>
+              <div style={ui.sidebarVersionBox}>
                 <div style={{ fontSize: 12 }}>{(language === "ar" ? "الإصدار " : "Version ") + __APP_VERSION__}</div>
                 <div style={{ fontSize: 10.5, marginTop: 3, opacity: 0.8, direction: "ltr" }}>{__APP_BUILD_DATE__}</div>
               </div>
@@ -7885,19 +8211,110 @@ useEffect(() => {
         </div>
       )}
 
-      <div style={{ ...ui.statsGrid, ...(isMobileView ? ui.statsGridMobile : {}) }}>
-        {!isEmployee && (
-          <>
-            <SummaryCard title={t.employeeCount} value={formatNumber(totals.employeeCount)} icon={Users} isMobile={isMobileView} />
-            <SummaryCard title={t.branchCount} value={formatNumber(totals.branchCount)} icon={MapPin} isMobile={isMobileView} />
-          </>
-        )}
-        <SummaryCard title={t.payrollTotal} value={currency(totals.totalPayroll)} icon={Wallet} isMobile={isMobileView} />
-        <SummaryCard title={t.leaveTotal} value={formatNumber(totals.totalLeaveBalance)} icon={CalendarDays} isMobile={isMobileView} />
-        <SummaryCard title={t.advancesTotal} value={currency(totals.totalAdvances)} icon={BadgeInfo} isMobile={isMobileView} />
-      </div>
+      {activeTab !== "chat" && activeTab !== "evaluation" && (
+        <div data-stats-grid="true" style={{ ...ui.statsGrid, ...(isMobileView ? ui.statsGridMobile : {}) }}>
+          {!isEmployee && (
+            <>
+              <SummaryCard title={t.employeeCount} value={formatNumber(totals.employeeCount)} icon={Users} isMobile={isMobileView} />
+              <SummaryCard title={t.branchCount} value={formatNumber(totals.branchCount)} icon={MapPin} isMobile={isMobileView} />
+            </>
+          )}
+          <SummaryCard title={t.payrollTotal} value={currency(totals.totalPayroll)} icon={Wallet} isMobile={isMobileView} />
+          <SummaryCard title={t.leaveTotal} value={formatNumber(totals.totalLeaveBalance)} icon={CalendarDays} isMobile={isMobileView} />
+          <SummaryCard title={t.advancesTotal} value={currency(totals.totalAdvances)} icon={BadgeInfo} isMobile={isMobileView} />
+        </div>
+      )}
 
       
+
+      {activeTab === "evaluation" && (
+        <Card>
+          <SectionHeader
+            isMobile={isMobileView}
+            icon={Award}
+            title={language === "ar" ? "لوحة تقييم الموظفين" : "Employee Scorecard"}
+            description={language === "ar" ? "هذا القسم قيد التطوير وسيتم تفعيله قريباً." : "This section is under development and will be enabled soon."}
+          />
+          <div style={{ ...ui.emptyState, textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 56, height: 56, borderRadius: "50%", background: "var(--surface-muted)", color: "var(--text-muted)" }}>
+              <Lock size={24} />
+            </span>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text)" }}>{language === "ar" ? "قريباً" : "Coming Soon"}</div>
+            <div>{language === "ar" ? "لوحة تقييم أداء الموظفين غير متاحة حالياً." : "The employee performance scorecard is not available yet."}</div>
+          </div>
+
+          <div style={{ marginTop: 18 }}>
+            <SectionHeader
+              isMobile={isMobileView}
+              icon={MessageCircle}
+              title={language === "ar" ? "ملاحظة" : "Note"}
+              description={language === "ar" ? "اكتب اقتراحك إذا تملك أي فكرة لهذا الموضوع." : "Write your suggestion if you have any idea about this."}
+            />
+            <Field label={language === "ar" ? "اكتب ملاحظتك" : "Write your note"} full>
+              <Textarea
+                value={evaluationNoteText}
+                onChange={(e) => { setEvaluationNoteText(e.target.value); setEvaluationNoteMessage(""); }}
+                placeholder={language === "ar" ? "اكتب ملاحظتك هنا..." : "Write your note here..."}
+              />
+            </Field>
+            {evaluationNoteMessage && (
+              <div style={ui.infoBox}>{evaluationNoteMessage}</div>
+            )}
+            <div style={{ marginTop: 10 }}>
+              <Button onClick={submitEvaluationNote} width={isMobileView ? "100%" : undefined}>
+                {language === "ar" ? "إرسال الملاحظة" : "Send note"}
+              </Button>
+            </div>
+          </div>
+
+          {canReadEvaluationNotes && (
+            <div style={{ marginTop: 22 }}>
+              <SectionHeader
+                isMobile={isMobileView}
+                icon={BadgeInfo}
+                title={language === "ar" ? "الملاحظات الواردة" : "Received Notes"}
+                description={language === "ar" ? "هذه الملاحظات تظهر لحسابك فقط." : "These notes are visible to your account only."}
+              />
+              {!evaluationNotes.length ? (
+                <div style={{ ...ui.emptyState, textAlign: "center" }}>{language === "ar" ? "لا توجد ملاحظات حتى الآن" : "No notes yet."}</div>
+              ) : isMobileView ? (
+                <div style={ui.mobileCardsStack}>
+                  {evaluationNotes.map((item) => (
+                    <MobileDataCard key={item.id} title={item.senderName || "-"}>
+                      <MobileFieldRow label={language === "ar" ? "الحساب" : "Account"} value={item.senderPhone || "-"} />
+                      <MobileFieldRow label={language === "ar" ? "التاريخ" : "Date"} value={item.createdAt ? new Date(item.createdAt).toLocaleString(language === "ar" ? "ar-EG" : "en-US") : "-"} />
+                      <MobileFieldRow label={language === "ar" ? "الملاحظة" : "Note"} value={item.message || "-"} accent />
+                    </MobileDataCard>
+                  ))}
+                </div>
+              ) : (
+                <div style={ui.tableWrap}>
+                  <table style={ui.table}>
+                    <thead>
+                      <tr>
+                        <th style={ui.th}>{language === "ar" ? "المرسل" : "Sender"}</th>
+                        <th style={ui.th}>{language === "ar" ? "الحساب" : "Account"}</th>
+                        <th style={ui.th}>{language === "ar" ? "الملاحظة" : "Note"}</th>
+                        <th style={ui.th}>{language === "ar" ? "التاريخ" : "Date"}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {evaluationNotes.map((item) => (
+                        <tr key={item.id}>
+                          <td style={ui.td}>{item.senderName || "-"}</td>
+                          <td style={ui.td}>{item.senderPhone || "-"}</td>
+                          <td style={ui.td}>{item.message || "-"}</td>
+                          <td style={ui.td}>{item.createdAt ? new Date(item.createdAt).toLocaleString(language === "ar" ? "ar-EG" : "en-US") : "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
 
       {activeTab === "programmerFeedback" && isProgrammerUser && (
         <Card>
@@ -10946,6 +11363,43 @@ useEffect(() => {
         <Field label={t.reason}><Textarea value={rewardRequestForm.reason} onChange={(e) => setRewardRequestForm((p) => ({ ...p, reason: e.target.value }))} /></Field>
         <div style={{ ...ui.modalActions, ...(isMobileView ? ui.modalActionsMobile : {}) }}><Button onClick={submitRewardRequest}>{canManageAll ? t.rewardOrDeduction : t.requestReward}</Button></div>
       </Modal>
+
+      {isMobileView && (
+        <nav style={ui.bottomNav} aria-label={language === "ar" ? "التنقل الرئيسي" : "Main navigation"}>
+          {[
+            { tab: "employees", icon: Users, label: language === "ar" ? "الموظفين" : "Employees" },
+            { tab: "salary", icon: Briefcase, label: language === "ar" ? "الرواتب" : "Salary" },
+            { tab: "leave", icon: CalendarDays, label: language === "ar" ? "الإجازات" : "Leave" },
+            ...(canAccessRequestsHub ? [{ tab: "chat", icon: MessageCircle, label: t.chatTab }] : []),
+          ].map((item) => {
+            const ItemIcon = item.icon;
+            return (
+              <button
+                key={item.tab}
+                type="button"
+                onClick={() => openSidebarTab(item.tab)}
+                aria-current={activeTab === item.tab ? "page" : undefined}
+                style={{ ...ui.bottomNavItem, ...(activeTab === item.tab ? ui.bottomNavItemActive : {}) }}
+              >
+                <ItemIcon size={20} />
+                <span style={ui.bottomNavLabel}>{item.label}</span>
+              </button>
+            );
+          })}
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            style={ui.bottomNavItem}
+            aria-label={language === "ar" ? "المزيد" : "More"}
+          >
+            <Menu size={20} />
+            <span style={ui.bottomNavLabel}>{language === "ar" ? "المزيد" : "More"}</span>
+            {topMenuNotificationsCount > 0 && (
+              <span style={ui.bottomNavBadge}>{topMenuNotificationsCount > 99 ? "99+" : topMenuNotificationsCount}</span>
+            )}
+          </button>
+        </nav>
+      )}
     </div>
   );
 }
@@ -10953,20 +11407,144 @@ useEffect(() => {
 const ui = {
   appShell: {
     minHeight: "100vh",
-    padding: 16,
-    background: "var(--bg)",
+    padding: "0 20px 32px",
+    background: "transparent",
     display: "grid",
-    gap: 12,
+    gap: "var(--sp-4)",
+    alignContent: "start",
     boxSizing: "border-box",
     width: "100%",
-    maxWidth: 1600,
+    maxWidth: 1680,
     margin: "0 auto",
     overflowX: "hidden",
   },
   appShellMobile: {
-    padding: 8,
-    gap: 10,
+    padding: "0 12px calc(var(--bottomnav-h) + 24px)",
+    gap: 12,
     maxWidth: "100%",
+  },
+  appShellWithRail: {
+    paddingInlineStart: "calc(20px + var(--rail-w))",
+  },
+  topBar: {
+    position: "sticky",
+    top: 0,
+    zIndex: 900,
+    minHeight: "var(--header-h)",
+    marginInline: -20,
+    padding: "10px 20px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    flexWrap: "nowrap",
+    background: "color-mix(in srgb, var(--surface) 90%, transparent)",
+    backdropFilter: "blur(12px)",
+    WebkitBackdropFilter: "blur(12px)",
+    borderBottom: "1px solid var(--border-strong)",
+    boxShadow: "var(--shadow-sm)",
+  },
+  topBarMobile: {
+    marginInline: -12,
+    padding: "8px 12px",
+    gap: 8,
+    minHeight: 56,
+  },
+  topBarIdentity: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    minWidth: 0,
+    flex: 1,
+  },
+  topBarLogo: {
+    width: 34,
+    height: 34,
+    borderRadius: "var(--r-sm)",
+    objectFit: "cover",
+    flexShrink: 0,
+  },
+  topBarName: {
+    fontSize: 15,
+    fontWeight: 700,
+    lineHeight: 1.3,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  topBarRole: {
+    fontSize: 12.5,
+    color: "var(--text-muted)",
+    lineHeight: 1.4,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
+  topBarActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    flexShrink: 0,
+  },
+  topBarIconBtn: {
+    width: "var(--control-h)",
+    padding: 0,
+  },
+  bottomNav: {
+    position: "fixed",
+    insetInline: 0,
+    bottom: 0,
+    zIndex: 1100,
+    height: "calc(var(--bottomnav-h) + env(safe-area-inset-bottom, 0px))",
+    paddingBottom: "env(safe-area-inset-bottom, 0px)",
+    display: "flex",
+    alignItems: "stretch",
+    background: "var(--surface)",
+    borderTop: "1px solid var(--border)",
+    boxShadow: "0 -4px 16px rgba(0,0,0,0.06)",
+  },
+  bottomNavItem: {
+    flex: 1,
+    minWidth: 0,
+    border: "none",
+    background: "transparent",
+    color: "var(--text-muted)",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+    cursor: "pointer",
+    padding: "6px 2px",
+    position: "relative",
+  },
+  bottomNavItemActive: {
+    color: "var(--accent)",
+  },
+  bottomNavLabel: {
+    fontSize: 10.5,
+    fontWeight: 700,
+    lineHeight: 1.2,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    maxWidth: "100%",
+  },
+  bottomNavBadge: {
+    position: "absolute",
+    top: 4,
+    insetInlineEnd: "calc(50% - 20px)",
+    minWidth: 16,
+    height: 16,
+    padding: "0 4px",
+    borderRadius: "var(--r-pill)",
+    background: "var(--danger)",
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: 800,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
   },
   heroCardMobile: {
     padding: 14,
@@ -11017,18 +11595,37 @@ const ui = {
   },
   summaryCardMobile: {
     padding: 14,
-    borderRadius: 6,
+    borderRadius: "var(--r-md)",
   },
   summaryValueMobile: {
-    fontSize: 18,
+    fontSize: 20,
+  },
+  summaryIconMobile: {
+    width: 36,
+    height: 36,
+    borderRadius: "var(--r-sm)",
   },
   cardMobile: {
     padding: 14,
-    borderRadius: 7,
+    borderRadius: "var(--r-md)",
+  },
+  glowLayer: {
+    position: "fixed",
+    inset: 0,
+    zIndex: -1,
+    pointerEvents: "none",
+    overflow: "hidden",
+  },
+  glowOrb: {
+    position: "absolute",
+    borderRadius: "50%",
+    background: "radial-gradient(circle, var(--glow) 0%, transparent 70%)",
+    filter: "blur(30px)",
+    willChange: "transform",
   },
   centerPage: {
     minHeight: "100vh",
-    background: "var(--bg)",
+    background: "transparent",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -11038,15 +11635,15 @@ const ui = {
   card: {
     background: "var(--surface)",
     border: "1px solid var(--border)",
-    borderRadius: 7,
-    padding: 16,
-    boxShadow: "var(--shadow)",
+    borderRadius: "var(--r-lg)",
+    padding: "var(--sp-5)",
+    boxShadow: "var(--shadow-sm)",
     overflow: "hidden",
     maxWidth: "100%",
   },
   innerCard: {
-    padding: 18,
-    borderRadius: 5,
+    padding: "var(--sp-5)",
+    borderRadius: "var(--r-md)",
   },
   authCard: {
     width: "100%",
@@ -11126,6 +11723,14 @@ const ui = {
     flexWrap: "wrap",
     alignItems: "center",
   },
+  feedbackFloatingButtonMobile: {
+    bottom: "calc(var(--bottomnav-h) + env(safe-area-inset-bottom, 0px) + 14px)",
+    width: 46,
+    height: 46,
+  },
+  syncStatusDotMobile: {
+    bottom: "calc(var(--bottomnav-h) + env(safe-area-inset-bottom, 0px) + 10px)",
+  },
   feedbackFloatingButton: {
     position: "fixed",
     left: 18,
@@ -11147,7 +11752,9 @@ const ui = {
     width: 52,
     height: 52,
     borderRadius: 5,
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     background: "var(--surface-soft)",
     color: "#f59e0b",
     display: "flex",
@@ -11215,41 +11822,46 @@ const ui = {
   },
   statsGrid: {
     display: "grid",
-    gap: 10,
-    gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
-    alignItems: "start",
+    gap: 12,
+    gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+    alignItems: "stretch",
   },
   summaryCard: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "center",
+    gap: 12,
+    height: "100%",
   },
   summaryTitle: {
     color: "var(--text-soft)",
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 700,
   },
   summaryValue: {
-    marginTop: 4,
-    fontSize: 22,
-    fontWeight: 900,
+    marginTop: 6,
+    fontSize: 26,
+    fontWeight: 800,
+    lineHeight: 1.15,
     color: "var(--text)",
   },
   summarySubtitle: {
     marginTop: 4,
     color: "var(--text-muted)",
-    fontSize: 13,
-    lineHeight: 1.7,
+    fontSize: 12.5,
+    lineHeight: 1.6,
   },
   summaryIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 5,
-    background: "var(--surface-muted)",
-    border: "1px solid var(--border)",
+    width: 44,
+    height: 44,
+    borderRadius: "var(--r-md)",
+    background: "var(--accent-soft)",
+    border: "1px solid var(--accent-border)",
+    color: "var(--accent)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    flexShrink: 0,
   },
   tabsBar: {
     display: "flex",
@@ -11262,30 +11874,75 @@ const ui = {
     minWidth: 240,
     padding: "0 22px",
     fontSize: 16,
-    borderRadius: 6,
+    borderRadius: "var(--r-md)",
   },
   sectionHeader: {
     display: "flex",
     gap: 14,
-    alignItems: "flex-start",
-    marginBottom: 16,
+    alignItems: "center",
+    marginBottom: "var(--sp-5)",
+    paddingBottom: "var(--sp-4)",
+    borderBottom: "1px solid var(--border)",
+  },
+  sectionIconMobile: {
+    width: 36,
+    height: 36,
+    borderRadius: "var(--r-sm)",
+  },
+  chatNameButtonMobile: {
+    fontSize: 15,
+    maxWidth: "52vw",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  chatAttachmentLink: {
+    color: "inherit",
+    fontWeight: 700,
+    textDecoration: "underline",
+    wordBreak: "break-all",
+  },
+  advanceMiniButton: {
+    width: 30,
+    height: 30,
+    flexShrink: 0,
+    borderRadius: "var(--r-sm)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+    background: "var(--surface)",
+    color: "var(--text-soft)",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+  },
+  sectionActions: {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    gap: "var(--sp-2)",
+    marginBottom: "var(--sp-4)",
   },
   sectionIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 5,
-    background: "var(--surface-muted)",
-    border: "1px solid var(--border)",
+    width: 42,
+    height: 42,
+    borderRadius: "var(--r-md)",
+    background: "var(--accent-soft)",
+    border: "1px solid var(--accent-border)",
+    color: "var(--accent)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    flexShrink: 0,
   },
   tableWrap: {
     overflowX: "auto",
     overflowY: "hidden",
     border: "1px solid var(--border)",
-    borderRadius: 6,
-    background: "rgba(255,255,255,0.01)",
+    borderRadius: "var(--r-md)",
+    background: "var(--surface)",
     maxWidth: "100%",
     WebkitOverflowScrolling: "touch",
   },
@@ -11305,26 +11962,32 @@ const ui = {
     tableLayout: "auto",
   },
   th: {
-    padding: 14,
-    background: "var(--surface-soft)",
+    padding: "12px 14px",
+    background: "var(--surface-muted)",
     borderBottom: "1px solid var(--border)",
-    textAlign: "start",
-    fontWeight: 800,
-    fontSize: 14,
+    textAlign: "center",
+    fontWeight: 700,
+    fontSize: 12.5,
+    letterSpacing: "0.02em",
+    color: "var(--text-soft)",
+    whiteSpace: "nowrap",
+    position: "sticky",
+    top: 0,
+    zIndex: 1,
   },
   td: {
-    padding: 14,
+    padding: "14px",
     borderBottom: "1px solid var(--border)",
-    textAlign: "start",
-    verticalAlign: "top",
-    lineHeight: 1.8,
+    textAlign: "center",
+    verticalAlign: "middle",
+    lineHeight: 1.7,
     fontSize: 14,
     wordBreak: "break-word",
     overflowWrap: "anywhere",
   },
   emptyCell: {
     textAlign: "center",
-    padding: 28,
+    padding: 40,
     color: "var(--text-muted)",
   },
   iconInline: {
@@ -11343,117 +12006,148 @@ const ui = {
     width: "100%",
   },
   badge: {
-    display: "inline-block",
-    padding: "6px 10px",
-    borderRadius: 999,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "4px 10px",
+    borderRadius: "var(--r-pill)",
     background: "var(--surface-muted)",
     border: "1px solid var(--border)",
     fontSize: 12,
     fontWeight: 700,
+    lineHeight: 1.6,
+    whiteSpace: "nowrap",
   },
   label: {
     display: "block",
-    marginBottom: 8,
-    fontWeight: 800,
-    fontSize: 14,
-    color: "var(--text)",
+    marginBottom: 6,
+    fontWeight: 700,
+    fontSize: 13.5,
+    color: "var(--text-soft)",
   },
   input: {
     width: "100%",
-    height: 46,
-    borderRadius: 7,
-    border: "1.5px solid var(--input-border)",
+    height: "var(--control-h)",
+    borderRadius: "var(--r-md)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--input-border)",
     padding: "0 14px",
     outline: "none",
     boxSizing: "border-box",
-    fontSize: 14,
+    fontSize: 15,
     background: "var(--input-bg)",
     color: "var(--input-text)",
     marginBottom: 0,
-    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.02)",
   },
   select: {
     width: "100%",
-    height: 46,
-    borderRadius: 7,
-    border: "1.5px solid var(--input-border)",
+    height: "var(--control-h)",
+    borderRadius: "var(--r-md)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--input-border)",
     padding: "0 14px",
     outline: "none",
     boxSizing: "border-box",
-    fontSize: 14,
+    fontSize: 15,
     background: "var(--input-bg)",
     color: "var(--input-text)",
     marginBottom: 0,
     appearance: "auto",
-    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.02)",
   },
   infoBox: {
     padding: "12px 14px",
-    borderRadius: 5,
-    border: "1px solid var(--border)",
+    borderRadius: "var(--r-md)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     background: "var(--surface-soft)",
     color: "var(--text-soft)",
     fontSize: 14,
+    lineHeight: 1.7,
   },
   emptyState: {
-    padding: "30px 16px",
-    borderRadius: 6,
-    border: "1px dashed var(--border)",
+    padding: "40px 20px",
+    borderRadius: "var(--r-md)",
+    border: "1px dashed var(--border-strong)",
     background: "var(--surface-soft)",
-    color: "var(--text-soft)",
-    fontSize: 16,
+    color: "var(--text-muted)",
+    fontSize: 15,
+    lineHeight: 1.8,
   },
   textarea: {
     width: "100%",
-    minHeight: 120,
-    borderRadius: 7,
-    border: "1.5px solid var(--input-border)",
+    minHeight: 110,
+    borderRadius: "var(--r-md)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--input-border)",
     background: "var(--modal-textarea-bg)",
     color: "var(--input-text)",
     padding: 14,
     outline: "none",
     boxSizing: "border-box",
-    fontSize: 14,
+    fontSize: 15,
+    lineHeight: 1.7,
     resize: "vertical",
-    boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.02)",
   },
   buttonBase: {
-    height: 42,
-    padding: "0 14px",
-    borderRadius: 7,
+    height: "var(--control-h)",
+    minWidth: "var(--control-h)",
+    padding: "0 16px",
+    borderRadius: "var(--r-md)",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
     cursor: "pointer",
     fontWeight: 700,
-    border: "1px solid transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "transparent",
     fontSize: 14,
+    lineHeight: 1,
+    whiteSpace: "nowrap",
   },
   buttonPrimary: {
     background: "var(--primary)",
     color: "var(--primary-contrast)",
     borderColor: "var(--primary)",
+    boxShadow: "var(--shadow-sm)",
   },
   buttonOutline: {
     background: "var(--surface)",
     color: "var(--text)",
-    borderColor: "var(--border)",
+    borderColor: "var(--border-strong)",
   },
   buttonDanger: {
-    background: "#b03a2e",
+    background: "var(--danger)",
     color: "#ffffff",
-    borderColor: "#dc2626",
+    borderColor: "var(--danger)",
+    boxShadow: "var(--shadow-sm)",
+  },
+  buttonSolidHover: {
+    filter: "brightness(1.08)",
+    boxShadow: "var(--shadow)",
+  },
+  buttonOutlineHover: {
+    background: "var(--surface-muted)",
+    borderColor: "var(--text-muted)",
   },
   smallBtn: {
-    height: 36,
+    height: 34,
+    minWidth: 34,
     fontSize: 13,
     padding: "0 12px",
+    borderRadius: "var(--r-sm)",
   },
   modalOverlay: {
     position: "fixed",
     inset: 0,
-    background: "rgba(15, 23, 42, 0.45)",
+    background: "var(--overlay)",
+    backdropFilter: "blur(3px)",
+    WebkitBackdropFilter: "blur(3px)",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -11464,32 +12158,38 @@ const ui = {
     width: "100%",
     maxHeight: "88vh",
     overflow: "auto",
-    background: "var(--surface-soft)",
-    borderRadius: 7,
+    background: "var(--surface)",
+    borderRadius: "var(--r-lg)",
     border: "1px solid var(--border)",
-    boxShadow: "0 30px 80px rgba(0,0,0,0.22)",
+    boxShadow: "var(--shadow-lg)",
   },
   modalHeader: {
-    padding: 14,
+    padding: "14px 18px",
     borderBottom: "1px solid var(--border)",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
-    background: "rgba(255,255,255,0.02)",
+    gap: 12,
+    background: "var(--surface-soft)",
+    position: "sticky",
+    top: 0,
+    zIndex: 2,
   },
   modalBody: {
-    padding: 16,
+    padding: "var(--sp-5)",
   },
   iconButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 7,
-    border: "1px solid var(--border)",
+    width: "var(--control-h)",
+    height: "var(--control-h)",
+    borderRadius: "var(--r-md)",
+    border: "1px solid var(--border-strong)",
     background: "var(--surface)",
+    color: "var(--text)",
     cursor: "pointer",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
+    flexShrink: 0,
   },
   grid2: {
     display: "grid",
@@ -11550,8 +12250,8 @@ const ui = {
   settingsBox: {
     border: "1px solid var(--border)",
     background: "var(--surface-soft)",
-    borderRadius: 6,
-    padding: 18,
+    borderRadius: "var(--r-md)",
+    padding: 16,
   },
   settingsTitle: {
     display: "flex",
@@ -11590,50 +12290,54 @@ const ui = {
   sidebarOverlay: {
     position: "fixed",
     inset: 0,
-    background: "rgba(2, 6, 23, 0.42)",
+    background: "var(--overlay)",
     zIndex: 1200,
   },
   sidebarPanel: {
     position: "absolute",
     top: 0,
     right: 0,
-    width: "min(360px, 92vw)",
+    width: "min(340px, 88vw)",
     height: "100vh",
     background: "var(--surface)",
-    backdropFilter: "blur(22px)",
     color: "var(--text)",
-    borderLeft: "1px solid var(--border)",
-    boxShadow: "-24px 0 60px rgba(0,0,0,0.18)",
+    borderInlineEnd: "1px solid var(--border)",
+    boxShadow: "var(--shadow-lg)",
     display: "flex",
     flexDirection: "column",
     overflow: "hidden",
   },
   sidebarTop: {
-    padding: "18px 18px 16px",
+    padding: "16px",
+    minHeight: "var(--header-h)",
     borderBottom: "1px solid var(--border)",
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 12,
-    position: "relative",
-    zIndex: 1,
+    flexShrink: 0,
   },
   sidebarBrand: {
-    fontSize: 13,
+    fontSize: 11.5,
     fontWeight: 700,
-    color: "var(--text-soft)",
-    marginBottom: 6,
+    color: "var(--text-muted)",
+    letterSpacing: "0.04em",
+    textTransform: "uppercase",
+    marginBottom: 2,
   },
   sidebarSubbrand: {
-    fontSize: 24,
-    fontWeight: 900,
-    color: "var(--accent)",
-    lineHeight: 1.2,
+    fontSize: 17,
+    fontWeight: 700,
+    color: "var(--text)",
+    lineHeight: 1.3,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
   },
   sidebarCloseButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 7,
+    width: 38,
+    height: 38,
+    borderRadius: "var(--r-md)",
     border: "1px solid var(--border)",
     background: "var(--surface-soft)",
     color: "var(--text)",
@@ -11644,46 +12348,124 @@ const ui = {
     flexShrink: 0,
   },
   sidebarBody: {
-    padding: 18,
+    padding: 12,
     display: "grid",
     gap: 18,
+    alignContent: "start",
     overflowY: "auto",
-    position: "relative",
-    zIndex: 1,
+    flex: 1,
+    minHeight: 0,
   },
   sidebarGroup: {
     display: "grid",
-    gap: 10,
+    gap: 4,
   },
   sidebarSectionLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: 800,
-    color: "var(--text-soft)",
-    letterSpacing: "0.02em",
+    color: "var(--text-muted)",
+    letterSpacing: "0.06em",
     textTransform: "uppercase",
-    paddingInline: 6,
+    padding: "0 12px 6px",
   },
   sidebarItem: {
     width: "100%",
-    minHeight: 52,
-    padding: "0 14px",
-    borderRadius: 5,
-    border: "1px solid transparent",
+    minHeight: 46,
+    padding: "8px 12px",
+    borderRadius: "var(--r-md)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "transparent",
     background: "transparent",
-    color: "var(--text)",
+    color: "var(--text-soft)",
     display: "flex",
     alignItems: "center",
-    gap: 12,
+    gap: 10,
     cursor: "pointer",
-    fontSize: 15,
-    fontWeight: 700,
+    fontSize: 14,
+    fontWeight: 600,
     textAlign: "start",
-    transition: "background 0.2s ease, border-color 0.2s ease, color 0.2s ease",
+    transition: "background 0.16s ease, border-color 0.16s ease, color 0.16s ease",
   },
   sidebarItemActive: {
     background: "var(--accent-soft)",
     borderColor: "var(--accent-border)",
     color: "var(--accent)",
+    fontWeight: 700,
+  },
+  sidebarItemCollapsed: {
+    justifyContent: "center",
+    minHeight: 40,
+    padding: 4,
+    position: "relative",
+  },
+  sidebarItemDot: {
+    position: "absolute",
+    top: 7,
+    insetInlineEnd: 7,
+    width: 8,
+    height: 8,
+    borderRadius: "50%",
+    background: "var(--danger)",
+  },
+  sidebarVersionBox: {
+    marginTop: 8,
+    paddingTop: 14,
+    borderTop: "1px solid var(--border)",
+    textAlign: "center",
+    color: "var(--text-muted)",
+  },
+  navRail: {
+    position: "fixed",
+    top: 0,
+    bottom: 0,
+    insetInlineStart: 0,
+    zIndex: 1100,
+    width: "var(--rail-w)",
+    background: "var(--surface)",
+    borderInlineEnd: "1px solid var(--border)",
+    display: "flex",
+    flexDirection: "column",
+    overflow: "hidden",
+    transition: "width 0.18s ease, box-shadow 0.18s ease",
+  },
+  navRailExpanded: {
+    width: "var(--rail-w-open)",
+    boxShadow: "var(--shadow-lg)",
+  },
+  navRailTop: {
+    minHeight: "var(--header-h)",
+    padding: "12px 7px",
+    borderBottom: "1px solid var(--border)",
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexShrink: 0,
+  },
+  navRailToggle: {
+    width: 38,
+    height: 38,
+    flexShrink: 0,
+    borderRadius: "var(--r-md)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+    background: "var(--surface-soft)",
+    color: "var(--text)",
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  navRailDivider: {
+    height: 1,
+    background: "var(--border)",
+    margin: "4px 8px 6px",
+  },
+  sidebarBodyCollapsed: {
+    padding: "10px 7px",
+    gap: 6,
+    overflowX: "hidden",
   },
 
   chatLayoutMobile: {
@@ -11948,7 +12730,9 @@ const ui = {
     minHeight: 38,
     padding: "0 14px",
     borderRadius: 999,
-    border: "1px solid var(--border)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     background: "var(--surface-soft)",
     color: "var(--text-soft)",
     cursor: "pointer",
@@ -11971,9 +12755,11 @@ const ui = {
     alignItems: "start",
     gap: 12,
     width: "100%",
-    border: "1px solid transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "transparent",
     background: "transparent",
-    borderRadius: 6,
+    borderRadius: "var(--r-md)",
     padding: 12,
     cursor: "pointer",
     textAlign: "inherit",
@@ -12200,7 +12986,7 @@ const ui = {
   chatMessagesAreaLarge: {
     flex: 1,
     padding: 18,
-    background: "radial-gradient(circle at top, rgba(37,211,102,0.08), transparent 34%), radial-gradient(circle at bottom, rgba(0,136,204,0.08), transparent 28%), var(--surface-soft)",
+    background: "var(--surface-muted)",
     overflowY: "auto",
     display: "grid",
     gap: 10,
@@ -12211,16 +12997,21 @@ const ui = {
   },
   chatBubble: {
     maxWidth: "82%",
-    borderRadius: 7,
-    padding: "12px 14px",
-    boxShadow: "var(--shadow)",
-    border: "1px solid var(--border)",
+    borderRadius: "var(--r-md)",
+    padding: "10px 13px",
+    boxShadow: "var(--shadow-sm)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
   },
   chatBubbleMine: {
     background: "var(--accent-soft)",
+    borderColor: "var(--accent-border)",
+    borderStartEndRadius: "var(--r-sm)",
   },
   chatBubbleOther: {
     background: "var(--surface)",
+    borderStartStartRadius: "var(--r-sm)",
   },
   chatBubbleTypeRow: {
     display: "flex",
@@ -12467,25 +13258,95 @@ const ui = {
     alignItems: "center",
     gap: 10,
     padding: "12px 14px",
-    borderRadius: 5,
-    border: "1px solid var(--border)",
+    borderRadius: "var(--r-md)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     background: "var(--surface-soft)",
     cursor: "pointer",
   },
   groupMemberChipActive: {
     borderColor: "var(--accent-border)",
-    background: "rgba(37,211,102,0.12)",
+    background: "var(--accent-soft)",
   },
+  // No explicit color: the icon inherits from the item, so it turns accent when active.
   sidebarItemIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 7,
-    background: "rgba(251,146,60,0.15)",
-    border: "1px solid rgba(251,146,60,0.25)",
+    width: 32,
+    height: 32,
+    borderRadius: "var(--r-sm)",
+    background: "var(--surface-muted)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
     flexShrink: 0,
+  },
+  sidebarItemIconActive: {
+    background: "var(--accent-soft)",
+    borderColor: "var(--accent-border)",
+  },
+  sidebarItemText: {
+    flex: 1,
+    minWidth: 0,
+    lineHeight: 1.4,
+    overflow: "hidden",
+    display: "-webkit-box",
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: "vertical",
+  },
+  sidebarNotifBadge: {
+    minWidth: 20,
+    height: 20,
+    padding: "0 6px",
+    borderRadius: "var(--r-pill)",
+    background: "var(--danger)",
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: 800,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  sidebarSoonChip: {
+    padding: "2px 8px",
+    borderRadius: "var(--r-pill)",
+    background: "var(--surface-muted)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+    color: "var(--text-muted)",
+    fontSize: 10.5,
+    fontWeight: 800,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  menuButtonWrap: {
+    position: "relative",
+    display: "inline-flex",
+    flexShrink: 0,
+  },
+  menuNotifBadge: {
+    position: "absolute",
+    top: -5,
+    insetInlineEnd: -5,
+    minWidth: 18,
+    height: 18,
+    padding: "0 5px",
+    borderRadius: "var(--r-pill)",
+    background: "var(--danger)",
+    color: "#fff",
+    fontSize: 10.5,
+    fontWeight: 800,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    border: "2px solid var(--bg)",
+    pointerEvents: "none",
   },
 
   chatNameButton: {
@@ -12632,8 +13493,10 @@ const ui = {
   branchPill: {
     height: 40,
     padding: "0 14px",
-    borderRadius: 10,
-    border: "1px solid var(--border)",
+    borderRadius: "var(--r-md)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
     background: "var(--surface)",
     color: "var(--text-soft)",
     cursor: "pointer",
