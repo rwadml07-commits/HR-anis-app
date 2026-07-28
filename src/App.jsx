@@ -311,6 +311,10 @@ const initialChats = [
 const initialChatCalls = [];
 const initialFeedbackEntries = [];
 const PROGRAMMER_ACCOUNT_PHONE = "مبرمجR1";
+// Notes written in the (still locked) evaluation section are delivered to this
+// account only. It matches the default owner phone below.
+const EVALUATION_NOTE_TARGET_PHONE = "0950000000";
+const EVALUATION_NOTE_KIND = "evaluationNote";
 
 const initialSystemUsers = [
   { phone: "0950000000", password: "12345678", role: "owner", name: "المالك", managedDepartment: "all", managedBranch: "all", mustChangePassword: false, passwordChangedOnce: true },
@@ -1961,6 +1965,8 @@ export default function HRManagementApp() {
   const [feedbackWidgetOpen, setFeedbackWidgetOpen] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState({ rating: 0, message: "" });
   const [feedbackMessage, setFeedbackMessage] = useState("");
+  const [evaluationNoteText, setEvaluationNoteText] = useState("");
+  const [evaluationNoteMessage, setEvaluationNoteMessage] = useState("");
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -4380,11 +4386,59 @@ useEffect(() => {
 
   const visibleFeedbackEntries = useMemo(() => {
     if (!authUser) return [];
+    // Evaluation notes are addressed to the owner account only, so they never
+    // show up in the programmer feedback inbox.
+    const ratings = feedbackEntries.filter((item) => item.kind !== EVALUATION_NOTE_KIND);
     if (isProgrammerUser) {
-      return [...feedbackEntries].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      return [...ratings].sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     }
-    return feedbackEntries.filter((item) => item.senderPhone === authUser.phone).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    return ratings.filter((item) => item.senderPhone === authUser.phone).sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
   }, [feedbackEntries, authUser, isProgrammerUser]);
+
+  const canReadEvaluationNotes = String(authUser?.phone || "").trim() === EVALUATION_NOTE_TARGET_PHONE;
+
+  const evaluationNotes = useMemo(() => {
+    if (!canReadEvaluationNotes) return [];
+    return feedbackEntries
+      .filter((item) => item.kind === EVALUATION_NOTE_KIND)
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+  }, [feedbackEntries, canReadEvaluationNotes]);
+
+  const submitEvaluationNote = async () => {
+    if (!authUser) return;
+    const text = String(evaluationNoteText || "").trim();
+    if (!text) {
+      setEvaluationNoteMessage(language === "ar" ? "اكتب الملاحظة قبل الإرسال" : "Write your note before sending.");
+      return;
+    }
+
+    const newEntry = {
+      id: uniqueId(),
+      kind: EVALUATION_NOTE_KIND,
+      senderName: authUser.name || authUser.phone || "-",
+      senderPhone: authUser.phone || "-",
+      rating: 0,
+      message: text,
+      targetPhone: EVALUATION_NOTE_TARGET_PHONE,
+      createdAt: new Date().toISOString(),
+      status: "sent",
+    };
+    const nextFeedback = [newEntry, ...feedbackEntries];
+    setFeedbackEntries(nextFeedback);
+    setEvaluationNoteText("");
+    setEvaluationNoteMessage(language === "ar" ? "تم إرسال الملاحظة بنجاح" : "Your note was sent.");
+    await forceRemoteSaveSnapshot({
+      employees,
+      requests,
+      users: systemUsers,
+      pending: pendingAccounts,
+      upgrades: upgradeRequests,
+      complaints,
+      chats,
+      chatCalls,
+      feedback: nextFeedback,
+    });
+  };
 
   const submitFeedback = async () => {
     if (!authUser) return;
@@ -6050,6 +6104,8 @@ useEffect(() => {
     setPasswordDialogOpen(false);
     setSidebarOpen(false);
     setViewMode("upgraded");
+    setEvaluationNoteText("");
+    setEvaluationNoteMessage("");
   };
 
   const openResetSystemDialog = () => {
@@ -8127,6 +8183,77 @@ useEffect(() => {
             <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text)" }}>{language === "ar" ? "قريباً" : "Coming Soon"}</div>
             <div>{language === "ar" ? "لوحة تقييم أداء الموظفين غير متاحة حالياً." : "The employee performance scorecard is not available yet."}</div>
           </div>
+
+          <div style={{ marginTop: 18 }}>
+            <SectionHeader
+              isMobile={isMobileView}
+              icon={MessageCircle}
+              title={language === "ar" ? "ملاحظة" : "Note"}
+              description={language === "ar" ? "اقترح إذا تملك فكرة." : "Suggest an idea if you have one."}
+            />
+            <Field label={language === "ar" ? "اكتب ملاحظتك" : "Write your note"} full>
+              <Textarea
+                value={evaluationNoteText}
+                onChange={(e) => { setEvaluationNoteText(e.target.value); setEvaluationNoteMessage(""); }}
+                placeholder={language === "ar" ? "اكتب ملاحظتك هنا..." : "Write your note here..."}
+              />
+            </Field>
+            {evaluationNoteMessage && (
+              <div style={ui.infoBox}>{evaluationNoteMessage}</div>
+            )}
+            <div style={{ marginTop: 10 }}>
+              <Button onClick={submitEvaluationNote} width={isMobileView ? "100%" : undefined}>
+                {language === "ar" ? "إرسال الملاحظة" : "Send note"}
+              </Button>
+            </div>
+          </div>
+
+          {canReadEvaluationNotes && (
+            <div style={{ marginTop: 22 }}>
+              <SectionHeader
+                isMobile={isMobileView}
+                icon={BadgeInfo}
+                title={language === "ar" ? "الملاحظات الواردة" : "Received Notes"}
+                description={language === "ar" ? "هذه الملاحظات تظهر لحسابك فقط." : "These notes are visible to your account only."}
+              />
+              {!evaluationNotes.length ? (
+                <div style={{ ...ui.emptyState, textAlign: "center" }}>{language === "ar" ? "لا توجد ملاحظات حتى الآن" : "No notes yet."}</div>
+              ) : isMobileView ? (
+                <div style={ui.mobileCardsStack}>
+                  {evaluationNotes.map((item) => (
+                    <MobileDataCard key={item.id} title={item.senderName || "-"}>
+                      <MobileFieldRow label={language === "ar" ? "الحساب" : "Account"} value={item.senderPhone || "-"} />
+                      <MobileFieldRow label={language === "ar" ? "التاريخ" : "Date"} value={item.createdAt ? new Date(item.createdAt).toLocaleString(language === "ar" ? "ar-EG" : "en-US") : "-"} />
+                      <MobileFieldRow label={language === "ar" ? "الملاحظة" : "Note"} value={item.message || "-"} accent />
+                    </MobileDataCard>
+                  ))}
+                </div>
+              ) : (
+                <div style={ui.tableWrap}>
+                  <table style={ui.table}>
+                    <thead>
+                      <tr>
+                        <th style={ui.th}>{language === "ar" ? "المرسل" : "Sender"}</th>
+                        <th style={ui.th}>{language === "ar" ? "الحساب" : "Account"}</th>
+                        <th style={ui.th}>{language === "ar" ? "الملاحظة" : "Note"}</th>
+                        <th style={ui.th}>{language === "ar" ? "التاريخ" : "Date"}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {evaluationNotes.map((item) => (
+                        <tr key={item.id}>
+                          <td style={ui.td}>{item.senderName || "-"}</td>
+                          <td style={ui.td}>{item.senderPhone || "-"}</td>
+                          <td style={ui.td}>{item.message || "-"}</td>
+                          <td style={ui.td}>{item.createdAt ? new Date(item.createdAt).toLocaleString(language === "ar" ? "ar-EG" : "en-US") : "-"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </Card>
       )}
 
