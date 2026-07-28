@@ -55,6 +55,7 @@ import {
   EyeOff,
   Upload,
   Building2,
+  Award,
 } from "lucide-react";
 
 // === Artifact-preview compatibility shim ===
@@ -7834,6 +7835,13 @@ useEffect(() => {
         { tab: "employees", icon: Users, label: t.employeesTab, short: language === "ar" ? "الموظفين" : "Employees" },
         { tab: "salary", icon: Briefcase, label: t.salaryTab, short: language === "ar" ? "الرواتب" : "Salary" },
         { tab: "leave", icon: CalendarDays, label: t.leaveTab, short: language === "ar" ? "الإجازات" : "Leave" },
+        {
+          tab: "evaluation",
+          icon: Award,
+          label: language === "ar" ? "لوحة تقييم الموظفين" : "Employee Scorecard",
+          short: language === "ar" ? "التقييم" : "Scorecard",
+          soon: true,
+        },
       ],
     },
     ...(canAccessRequestsHub
@@ -7893,6 +7901,9 @@ useEffect(() => {
           <ItemIcon size={18} />
         </span>
         {!collapsed && <span style={ui.sidebarItemText}>{item.label}</span>}
+        {item.soon && !collapsed && (
+          <span style={ui.sidebarSoonChip}>{language === "ar" ? "قريباً" : "Soon"}</span>
+        )}
         {item.badge > 0 && (
           collapsed
             ? <span style={ui.sidebarItemDot} />
@@ -8085,7 +8096,7 @@ useEffect(() => {
         </div>
       )}
 
-      {activeTab !== "chat" && (
+      {activeTab !== "chat" && activeTab !== "evaluation" && (
         <div data-stats-grid="true" style={{ ...ui.statsGrid, ...(isMobileView ? ui.statsGridMobile : {}) }}>
           {!isEmployee && (
             <>
@@ -8100,6 +8111,24 @@ useEffect(() => {
       )}
 
       
+
+      {activeTab === "evaluation" && (
+        <Card>
+          <SectionHeader
+            isMobile={isMobileView}
+            icon={Award}
+            title={language === "ar" ? "لوحة تقييم الموظفين" : "Employee Scorecard"}
+            description={language === "ar" ? "هذا القسم قيد التطوير وسيتم تفعيله قريباً." : "This section is under development and will be enabled soon."}
+          />
+          <div style={{ ...ui.emptyState, textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+            <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 56, height: 56, borderRadius: "50%", background: "var(--surface-muted)", color: "var(--text-muted)" }}>
+              <Lock size={24} />
+            </span>
+            <div style={{ fontSize: 20, fontWeight: 800, color: "var(--text)" }}>{language === "ar" ? "قريباً" : "Coming Soon"}</div>
+            <div>{language === "ar" ? "لوحة تقييم أداء الموظفين غير متاحة حالياً." : "The employee performance scorecard is not available yet."}</div>
+          </div>
+        </Card>
+      )}
 
       {activeTab === "programmerFeedback" && isProgrammerUser && (
         <Card>
@@ -13074,6 +13103,21 @@ const ui = {
     background: "var(--danger)",
     color: "#fff",
     fontSize: 11,
+    fontWeight: 800,
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+  },
+  sidebarSoonChip: {
+    padding: "2px 8px",
+    borderRadius: "var(--r-pill)",
+    background: "var(--surface-muted)",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "var(--border)",
+    color: "var(--text-muted)",
+    fontSize: 10.5,
     fontWeight: 800,
     display: "inline-flex",
     alignItems: "center",
