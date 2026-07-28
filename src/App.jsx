@@ -2723,7 +2723,7 @@ export default function HRManagementApp() {
           "--shadow": "0 1px 2px rgba(60, 40, 20, 0.05), 0 6px 18px rgba(60, 40, 20, 0.07)",
           "--shadow-lg": "0 24px 56px rgba(60, 40, 20, 0.16)",
           "--page-bg": `${PAPER_GRAIN_SVG.replace("OPACITY", "0.13")}, #e8e0d1`,
-          "--glow": "rgba(214, 108, 45, 0.32)",
+          "--glow": "rgba(214, 108, 45, 0.46)",
         };
 
     const scale = {
