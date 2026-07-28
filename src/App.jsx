@@ -310,6 +310,10 @@ const initialChats = [
 
 const initialChatCalls = [];
 const initialFeedbackEntries = [];
+// Tiling grayscale noise used to give the page background a subtle paper grain
+// instead of a flat colour. Kept as a data URI so there is no extra request.
+const PAPER_GRAIN_SVG = "url(data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%27120%27%20height=%27120%27%3E%3Cfilter%20id=%27g%27%3E%3CfeTurbulence%20type=%27fractalNoise%27%20baseFrequency=%270.8%27%20numOctaves=%274%27%20stitchTiles=%27stitch%27/%3E%3CfeColorMatrix%20type=%27saturate%27%20values=%270%27/%3E%3C/filter%3E%3Crect%20width=%27120%27%20height=%27120%27%20filter=%27url%28%23g%29%27%20opacity=%27OPACITY%27/%3E%3C/svg%3E)";
+
 const PROGRAMMER_ACCOUNT_PHONE = "مبرمجR1";
 // Notes written in the (still locked) evaluation section are delivered to this
 // account only. It matches the default owner phone below.
@@ -2657,6 +2661,7 @@ export default function HRManagementApp() {
           "--shadow-sm": "0 1px 2px rgba(0, 0, 0, 0.5)",
           "--shadow": "0 1px 3px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.36)",
           "--shadow-lg": "0 24px 60px rgba(0, 0, 0, 0.55)",
+          "--page-bg": `${PAPER_GRAIN_SVG.replace("OPACITY", "0.07")}, #17191b`,
         }
       : {
           "--bg": "#e8e0d1",
@@ -2687,6 +2692,7 @@ export default function HRManagementApp() {
           "--shadow-sm": "0 1px 2px rgba(60, 40, 20, 0.06)",
           "--shadow": "0 1px 2px rgba(60, 40, 20, 0.05), 0 6px 18px rgba(60, 40, 20, 0.07)",
           "--shadow-lg": "0 24px 56px rgba(60, 40, 20, 0.16)",
+          "--page-bg": `${PAPER_GRAIN_SVG.replace("OPACITY", "0.13")}, #e8e0d1`,
         };
 
     const scale = {
@@ -2711,7 +2717,8 @@ export default function HRManagementApp() {
     };
 
     Object.entries({ ...vars, ...scale }).forEach(([key, value]) => root.style.setProperty(key, value));
-    document.body.style.background = "var(--bg)";
+    document.body.style.background = "var(--page-bg)";
+    document.body.style.backgroundAttachment = "fixed";
     document.body.style.color = "var(--text)";
     document.querySelector('meta[name="theme-color"]')?.setAttribute("content", vars["--bg"]);
   }, [language, themeMode]);
@@ -11349,7 +11356,7 @@ const ui = {
   appShell: {
     minHeight: "100vh",
     padding: "0 20px 32px",
-    background: "var(--bg)",
+    background: "transparent",
     display: "grid",
     gap: "var(--sp-4)",
     alignContent: "start",
@@ -11551,7 +11558,7 @@ const ui = {
   },
   centerPage: {
     minHeight: "100vh",
-    background: "var(--bg)",
+    background: "transparent",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
