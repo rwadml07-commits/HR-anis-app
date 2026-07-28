@@ -1746,6 +1746,35 @@ function Badge({ children }) {
   return <span style={ui.badge}>{children}</span>;
 }
 
+// Four warm glows drifting behind the whole app. Sizes, positions and cycle
+// lengths are deliberately mismatched so the motion never looks repetitive.
+const AMBIENT_GLOWS = [
+  { size: 460, top: "6%", start: "4%", animation: "hr-glow-a 42s ease-in-out infinite" },
+  { size: 360, top: "48%", start: "64%", animation: "hr-glow-b 57s ease-in-out infinite" },
+  { size: 540, top: "66%", start: "14%", animation: "hr-glow-c 71s ease-in-out infinite" },
+  { size: 300, top: "18%", start: "72%", animation: "hr-glow-d 49s ease-in-out infinite" },
+];
+
+function AmbientGlow() {
+  return (
+    <div aria-hidden="true" data-ambient-glow="true" style={ui.glowLayer}>
+      {AMBIENT_GLOWS.map((glow) => (
+        <span
+          key={glow.animation}
+          style={{
+            ...ui.glowOrb,
+            width: glow.size,
+            height: glow.size,
+            top: glow.top,
+            insetInlineStart: glow.start,
+            animation: glow.animation,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function Modal({ open, title, children, onClose, maxWidth = 760 }) {
   React.useEffect(() => {
     if (!open) return undefined;
@@ -2662,6 +2691,7 @@ export default function HRManagementApp() {
           "--shadow": "0 1px 3px rgba(0, 0, 0, 0.5), 0 8px 24px rgba(0, 0, 0, 0.36)",
           "--shadow-lg": "0 24px 60px rgba(0, 0, 0, 0.55)",
           "--page-bg": `${PAPER_GRAIN_SVG.replace("OPACITY", "0.07")}, #17191b`,
+          "--glow": "rgba(224, 140, 66, 0.26)",
         }
       : {
           "--bg": "#e8e0d1",
@@ -2693,6 +2723,7 @@ export default function HRManagementApp() {
           "--shadow": "0 1px 2px rgba(60, 40, 20, 0.05), 0 6px 18px rgba(60, 40, 20, 0.07)",
           "--shadow-lg": "0 24px 56px rgba(60, 40, 20, 0.16)",
           "--page-bg": `${PAPER_GRAIN_SVG.replace("OPACITY", "0.13")}, #e8e0d1`,
+          "--glow": "rgba(214, 108, 45, 0.32)",
         };
 
     const scale = {
@@ -2767,6 +2798,24 @@ export default function HRManagementApp() {
       * { box-sizing: border-box; }
       html, body, #root { max-width: 100%; overflow-x: hidden; }
       img, video, canvas, audio { max-width: 100%; }
+
+      /* Four warm orange glows drifting slowly behind the whole app. */
+      @keyframes hr-glow-a { 0% { transform: translate3d(0, 0, 0); } 33% { transform: translate3d(22vw, 26vh, 0); } 66% { transform: translate3d(-14vw, 48vh, 0); } 100% { transform: translate3d(0, 0, 0); } }
+      @keyframes hr-glow-b { 0% { transform: translate3d(0, 0, 0); } 30% { transform: translate3d(-26vw, 34vh, 0); } 70% { transform: translate3d(-8vw, -22vh, 0); } 100% { transform: translate3d(0, 0, 0); } }
+      @keyframes hr-glow-c { 0% { transform: translate3d(0, 0, 0); } 40% { transform: translate3d(18vw, -30vh, 0); } 75% { transform: translate3d(34vw, 18vh, 0); } 100% { transform: translate3d(0, 0, 0); } }
+      @keyframes hr-glow-d { 0% { transform: translate3d(0, 0, 0); } 25% { transform: translate3d(-30vw, -16vh, 0); } 60% { transform: translate3d(12vw, -40vh, 0); } 100% { transform: translate3d(0, 0, 0); } }
+
+      /* The global reduced-motion reset would freeze the glows. They are a
+         decorative background the user explicitly asked for, they never move
+         content, and they are slow enough not to be distracting, so keep them
+         running. Selector specificity beats the reset's universal selector. */
+      @media (prefers-reduced-motion: reduce) {
+        [data-ambient-glow] > span { animation-iteration-count: infinite !important; }
+        [data-ambient-glow] > span:nth-child(1) { animation-duration: 42s !important; }
+        [data-ambient-glow] > span:nth-child(2) { animation-duration: 57s !important; }
+        [data-ambient-glow] > span:nth-child(3) { animation-duration: 71s !important; }
+        [data-ambient-glow] > span:nth-child(4) { animation-duration: 49s !important; }
+      }
       @media (max-width: 768px) {
         html, body { overflow-x: hidden !important; }
         body { -webkit-text-size-adjust: 100%; }
@@ -7815,6 +7864,7 @@ useEffect(() => {
     if (showRegister) {
       return (
         <div style={ui.centerPage}>
+          <AmbientGlow />
           <Card style={ui.authCard}>
             <div style={ui.authHead}>
               <h1 style={ui.bigTitle}>{t.registerTitle}</h1>
@@ -7867,6 +7917,7 @@ useEffect(() => {
 
     return (
       <div style={ui.centerPage}>
+        <AmbientGlow />
         <Card style={{ ...ui.authCard, maxWidth: 420, padding: "48px 28px" }}>
           <div style={{ ...ui.phoneWrap, marginBottom: 24 }}><img src={BRAND_ASSETS.logo} alt={BRAND_ASSETS.name} style={ui.brandLogoAuth} /></div>
 
@@ -7978,6 +8029,7 @@ useEffect(() => {
 
   return (
     <div style={{ ...ui.appShell, ...(isMobileView ? ui.appShellMobile : ui.appShellWithRail) }}>
+      <AmbientGlow />
       <header style={{ ...ui.topBar, ...(isMobileView ? ui.topBarMobile : {}) }}>
         <div style={ui.topBarIdentity}>
           <img src={BRAND_ASSETS.logo} alt="" aria-hidden="true" style={ui.topBarLogo} />
@@ -11386,10 +11438,11 @@ const ui = {
     justifyContent: "space-between",
     gap: 12,
     flexWrap: "nowrap",
-    background: "color-mix(in srgb, var(--bg) 88%, transparent)",
+    background: "color-mix(in srgb, var(--surface) 90%, transparent)",
     backdropFilter: "blur(12px)",
     WebkitBackdropFilter: "blur(12px)",
-    borderBottom: "1px solid var(--border)",
+    borderBottom: "1px solid var(--border-strong)",
+    boxShadow: "var(--shadow-sm)",
   },
   topBarMobile: {
     marginInline: -12,
@@ -11555,6 +11608,20 @@ const ui = {
   cardMobile: {
     padding: 14,
     borderRadius: "var(--r-md)",
+  },
+  glowLayer: {
+    position: "fixed",
+    inset: 0,
+    zIndex: -1,
+    pointerEvents: "none",
+    overflow: "hidden",
+  },
+  glowOrb: {
+    position: "absolute",
+    borderRadius: "50%",
+    background: "radial-gradient(circle, var(--glow) 0%, transparent 70%)",
+    filter: "blur(30px)",
+    willChange: "transform",
   },
   centerPage: {
     minHeight: "100vh",
