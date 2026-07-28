@@ -8189,7 +8189,7 @@ useEffect(() => {
               isMobile={isMobileView}
               icon={MessageCircle}
               title={language === "ar" ? "ملاحظة" : "Note"}
-              description={language === "ar" ? "اقترح إذا تملك فكرة." : "Suggest an idea if you have one."}
+              description={language === "ar" ? "اكتب اقتراحك إذا تملك أي فكرة." : "Write your suggestion if you have any idea."}
             />
             <Field label={language === "ar" ? "اكتب ملاحظتك" : "Write your note"} full>
               <Textarea
