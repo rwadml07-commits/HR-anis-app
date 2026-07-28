@@ -192,7 +192,7 @@ function buildPaletteUniforms(colorList) {
 export default function ChromaticWaves({
   frequency = 1,
   speed = 4,
-  bgColor = "transparent",
+  bgColor = "#000000",
   colors = ["#FFFFFF"],
   cellSize = 34,
   gamma = 6,
@@ -220,10 +220,6 @@ export default function ChromaticWaves({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-
-    const prefersReducedMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
     let renderer;
     try {
@@ -338,7 +334,7 @@ export default function ChromaticWaves({
       rafIdRef.current = requestAnimationFrame(update);
     };
 
-    isPlayingRef.current = !paused && !prefersReducedMotion;
+    isPlayingRef.current = !paused;
     if (isPlayingRef.current) {
       lastTimeRef.current = 0;
       rafIdRef.current = requestAnimationFrame(update);
@@ -346,7 +342,7 @@ export default function ChromaticWaves({
 
     // Stop burning GPU cycles while the tab is hidden.
     const onVisibility = () => {
-      const shouldPlay = !paused && !prefersReducedMotion && !document.hidden;
+      const shouldPlay = !paused && !document.hidden;
       isPlayingRef.current = shouldPlay;
       if (shouldPlay && rafIdRef.current == null) {
         lastTimeRef.current = 0;
