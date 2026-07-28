@@ -11965,7 +11965,7 @@ const ui = {
     padding: "12px 14px",
     background: "var(--surface-muted)",
     borderBottom: "1px solid var(--border)",
-    textAlign: "start",
+    textAlign: "center",
     fontWeight: 700,
     fontSize: 12.5,
     letterSpacing: "0.02em",
@@ -11978,7 +11978,7 @@ const ui = {
   td: {
     padding: "14px",
     borderBottom: "1px solid var(--border)",
-    textAlign: "start",
+    textAlign: "center",
     verticalAlign: "middle",
     lineHeight: 1.7,
     fontSize: 14,
